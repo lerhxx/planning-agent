@@ -125,7 +125,7 @@ npm run dev
 |---|---|---|
 | **M1** | 内核 + MockRuntime + 通用 UI | 目标 → 计划 → 执行 → 重规划 闭环跑通 |
 | **M2** | 接入第一个 Domain Pack | 领域能用内核跑通，且 `core/**` 无改动 |
-| **M3** | 接入第二个 Domain Pack（不同约束形状） | **`git diff --numstat m1-core-only..HEAD -- src/core shared \| wc -l` → 0** |
+| **M3** | 接入第二个 Domain Pack（不同约束形状） | **`git diff --numstat m1-core-only..HEAD -- src/core shared \| wc -l` → 0 个文件**，且同口径 `\| awk '{a+=$1;d+=$2} END{print a+d+0}'` → **0 行**（两种口径都要报，见 `docs/PRD.md` §12.2） |
 | **M4** | 打磨 + 双部署 | 在线链接 + README 演示 |
 
 **M3 是"可扩展"这个主张唯一的硬证据** —— 口头声称没有说服力，`git diff` 才有。

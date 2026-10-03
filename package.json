@@ -10,7 +10,9 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:commit-prefix": "bash scripts/check-commit-prefix.sh",
+    "segment-lines": "bash scripts/segment-lines.sh"
   },
   "dependencies": {
     "next": "16.3.3",

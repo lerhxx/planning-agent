@@ -177,7 +177,9 @@ grep -rnE "<领域词>" src/core shared | wc -l             # 必须 0
 grep -rn "\.code\|\.evidence\|\.suggestion" src/core | wc -l  # 必须 0
 grep -rn "@mastra/" src --include=*.ts | grep -v "core/runtime/mastra" | wc -l  # 必须 0
 rm -rf src/domains/<x> && npm run build                       # 必须通过
-git diff --numstat <core-tag>..HEAD -- src/core/** shared/** | wc -l        # 必须 0
+# 内核零改动：--numstat 每个文件输出一行，故 wc -l = 文件数；行数要用 awk 累加
+git diff --numstat <core-tag>..HEAD -- src/core/** shared/** | wc -l                        # 必须 0（文件数）
+git diff --numstat <core-tag>..HEAD -- src/core/** shared/** | awk '{a+=$1;d+=$2} END{print a+d+0}'  # 必须 0（增删行数）
 ```
 
 最后一条是"可扩展"这个主张**唯一的硬证据**。

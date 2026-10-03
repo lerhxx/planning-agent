@@ -3,7 +3,9 @@
  *
  * ## 为什么单独放一个文件
  *
- * M2 的硬指标是 `git diff --numstat m1-core-only -- src/core shared | wc -l` = 0。
+ * M2 的硬指标是 `git diff --numstat m1-core-only -- src/core shared` = **0 个文件 / 0 行**
+ * （两种口径都要报：`| wc -l` 数的是**文件个数**——`--numstat` 每个变更文件输出一行；
+ *   `| awk '{a+=$1;d+=$2} END{print a+d+0}'` 数的才是**增删行数**。见 `CLAUDE.md` 守卫区）。
  * `src/core/replan/gates.test.ts` 位于 `src/core/**`，往那里**加任何一行（包括测试）都会让这条非零**，
  * M2 的证据当场作废。因此本文件放在 `src/test/`：只 `import` 内核的纯函数来读，不改动内核，diff 仍是 0。
  *

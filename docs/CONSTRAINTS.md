@@ -226,7 +226,8 @@ rm -rf src/domains/<x> && npm run build                  # 必须通过
 8. 完成后必须验证：
    - grep 领域词 src/core shared → 0 命中
    - rm -rf src/domains/<id> && npm run build → 通过
-   - git diff --numstat <core-tag>..HEAD -- src/core/** shared/** | wc -l → 0
+   - git diff --numstat <core-tag>..HEAD -- src/core/** shared/** | wc -l → 0                                    # 文件数
+   - git diff --numstat <core-tag>..HEAD -- src/core/** shared/** | awk '{a+=$1;d+=$2} END{print a+d+0}' → 0    # 增删行数
 ```
 
 ## 5.3 新增一个流式事件（data part）
@@ -274,8 +275,11 @@ rm -rf src/domains/<x> && npm run build                          # → 通过
 # 4. PlanCompiler 单测覆盖
 npm test -- src/core/compiler
 
-# 5. 可扩展性证据
-git diff --numstat <core-tag>..HEAD -- src/core/** shared/** | wc -l   # → 0
+# 5. 可扩展性证据（`--numstat` 每个文件输出一行，故 `wc -l` = 文件数；行数要用 awk 累加）
+git diff --numstat <core-tag>..HEAD -- src/core/** shared/** | wc -l                          # → 0（文件数）
+git diff --numstat <core-tag>..HEAD -- src/core/** shared/** | awk '{a+=$1;d+=$2} END{print a+d+0}'   # → 0（增删行数）
 ```
+
+> 两种口径都要报：M2 两者皆 0 所以结论一致，但 N > 0 时只报 `wc -l` 会把文件数当行数讲出去（见 `docs/PRD.md` §12.2）。
 
 **五项全绿才算"这次改动没有破坏架构"。** 任何一项红了就修，不要带着红灯继续写。
