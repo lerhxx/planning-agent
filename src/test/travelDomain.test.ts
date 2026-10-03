@@ -14,6 +14,8 @@ import { travelMeta, TRAVEL_DOMAIN_ID } from '@/src/domains/travel/meta';
 import {
   ITINERARY_COMPOSE_STEP_TYPE,
   POI_SEARCH_STEP_TYPE,
+  IMAGE_UNDERSTAND_STEP_TYPE,
+  TRIP_BRIEF_STEP_TYPE,
   travelPlanning,
 } from '@/src/domains/travel/planning';
 import { travelPrompts } from '@/src/domains/travel/prompts';
@@ -126,7 +128,13 @@ describe('travel · 8 段齐全', () => {
 
   it('模板与工具对齐：每步的类型都在白名单内，且绑定的工具都对得上', () => {
     const allowed = travelPlanning.stepTypes.map((descriptor) => descriptor.type);
-    expect(allowed).toEqual([POI_SEARCH_STEP_TYPE, ITINERARY_COMPOSE_STEP_TYPE]);
+    // v2：白名单扩到 4 类（口径确认 / 图片理解 为新增），顺序与 `planning.ts` 的声明一致。
+    expect(allowed).toEqual([
+      POI_SEARCH_STEP_TYPE,
+      ITINERARY_COMPOSE_STEP_TYPE,
+      IMAGE_UNDERSTAND_STEP_TYPE,
+      TRIP_BRIEF_STEP_TYPE,
+    ]);
 
     for (const template of travelPlanning.templates) {
       expect(template.steps.length).toBeGreaterThan(0);

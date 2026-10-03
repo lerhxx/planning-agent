@@ -12,18 +12,33 @@
  * ★ 渲染侧纪律：**禁止原样注入 HTML**（`dangerouslySetInnerHTML` 一律不用）。
  * 本文件输出的 `href` 也做了协议白名单，挡掉 `javascript:` 之类的链接。
  */
-export type MdSpan = {
-  text: string;
-  bold?: boolean;
-  code?: boolean;
-  href?: string;
-};
+/**
+ * blocks 的**唯一真源是 zod schema**（红线 1：禁止手写第二份类型）。
+ *
+ * 之所以在这里定义而不是在组件 schema 里：md → blocks 的形状只有一个生产者（本文件），
+ * `ItineraryCard` 的 props schema 必须 re-export 同一份，否则"传了但被 strip"会静默发生。
+ */
+import { z } from 'zod';
 
-export type MdBlock =
-  | { kind: 'heading'; level: 1 | 2 | 3; spans: MdSpan[] }
-  | { kind: 'paragraph'; spans: MdSpan[] }
-  | { kind: 'list'; ordered: boolean; items: MdSpan[][] }
-  | { kind: 'quote'; spans: MdSpan[] };
+export const zMdSpan = z.object({
+  text: z.string(),
+  bold: z.boolean().optional(),
+  code: z.boolean().optional(),
+  href: z.string().optional(),
+});
+export type MdSpan = z.infer<typeof zMdSpan>;
+
+export const zMdBlock = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('heading'),
+    level: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    spans: z.array(zMdSpan),
+  }),
+  z.object({ kind: z.literal('paragraph'), spans: z.array(zMdSpan) }),
+  z.object({ kind: z.literal('list'), ordered: z.boolean(), items: z.array(z.array(zMdSpan)) }),
+  z.object({ kind: z.literal('quote'), spans: z.array(zMdSpan) }),
+]);
+export type MdBlock = z.infer<typeof zMdBlock>;
 
 /**
  * 行内三件套：`**bold**` / `` `code` `` / `[text](url)`。

@@ -23,8 +23,31 @@ export const travelEvaluation: DomainEvaluationContribution = {
       input: '（注入：让检索工具不返回来源）上海二日游',
       expect: ['SOURCE_MISSING', 'failed'],
     },
+    // —— v2 三条新 case ——
+    {
+      id: 'travel.image-coverage',
+      input: '（上传 10 张图）帮我按这些图规划上海三日游，预算 3000 元',
+      expect: ['image_understand', 'itinerary_compose', 'completed'],
+    },
+    {
+      id: 'travel.image-unresolved-clarify',
+      input: '（上传 2 张识别不出的图）帮我规划上海三日游',
+      // ★ Q-1 顺序：第一动作是**澄清**（用户看得到"跳过"），不是 error。
+      expect: ['awaiting_user', 'ClarifyOptions', 'STEP_AWAITING_USER'],
+    },
+    {
+      id: 'travel.image-mention-unresolved',
+      input: '（上传 3 张图）@不存在的图 想拍夜景，帮我规划上海二日游',
+      expect: ['unresolved', 'awaiting_user'],
+    },
   ],
-  metricIds: ['first_component_ms', 'component_degraded', 'cost_per_turn', 'fact_source_coverage'],
+  metricIds: [
+    'first_component_ms',
+    'component_degraded',
+    'cost_per_turn',
+    'fact_source_coverage',
+    'image_coverage',
+  ],
 
   score(caseId: string, actual: unknown): number {
     if (caseId !== 'travel.happy-path') return 0;

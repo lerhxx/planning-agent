@@ -112,6 +112,10 @@ export const travelUI: DomainUIContribution = {
         const overBudget = budgetCNY !== null && data.totalCostCNY > budgetCNY;
         const busiest = data.days.reduce((max, day) => Math.max(max, day.items.length), 0);
 
+        // ★ 覆盖度走**数据通道**（进 props），不走违规通道 ——
+        // `shared/stream/events.ts` 全文没有 violation/severity 字段，violations 用户看不到（§3.2 口径 4）。
+        const coverage = data.coverage;
+
         return {
           title: step.title,
           city: data.city,
@@ -124,7 +128,11 @@ export const travelUI: DomainUIContribution = {
               slot: item.slot,
               priceCNY: item.priceCNY,
               source: item.source,
+              /** ★ 意图溯源：`image` 来自图片 / `fill` 是填充推荐（与 `Step.origin` 同名不同义，K6）。 */
+              origin: item.origin,
+              assetIds: item.assetIds,
             })),
+            notes: day.notes,
             stayName: day.stayName,
             stayPriceCNY: day.stayPriceCNY,
             costCNY: day.costCNY,
@@ -132,11 +140,17 @@ export const travelUI: DomainUIContribution = {
           totalCostCNY: data.totalCostCNY,
           budgetCNY,
           overBudget,
+          ...(coverage ? { coverage } : {}),
+          /** markdown 只承载**叙述**：价格 / 评分 / 地址一律在结构化字段里（PRD §3.6）。 */
+          summaryBlocks: data.summaryBlocks,
           sourceRefs: data.sourceRefs.map((ref) => ({ label: ref.label, uri: ref.uri })),
           disclaimer: data.disclaimer,
           isEstimate: true,
           ...(busiest > MAX_ITEMS_PER_DAY
             ? { note: `有某一天安排超过 ${MAX_ITEMS_PER_DAY} 项，行程偏紧` }
+            : {}),
+          ...(coverage && coverage.missingAssetIds.length > 0
+            ? { note: `有 ${coverage.missingAssetIds.length} 张已识别的图片没排进行程` }
             : {}),
         };
       },
