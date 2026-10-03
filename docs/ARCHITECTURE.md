@@ -1,7 +1,7 @@
 # planning-agent · 架构地图（给 AI 读的精简版）
 
 > **本文只有地图与指针，不含选型论证。**
-> 论证在 `CONSTRAINTS.md`（规则与理由）和 `PRD.md`（需求与验收）。
+> 论证在 `docs/CONSTRAINTS.md`（规则与理由）和 `docs/PRD.md`（需求与验收）；深入版见 `techDocs/01-架构设计.md`。
 > **契约的唯一真源是代码里的 zod schema**，不是本文档；本文只告诉你去读哪个文件。
 
 ---
@@ -166,18 +166,18 @@ planning-agent/
 | `evaluation` | 评测钩子 |
 | `lifecycle` | 可选初始化/销毁 |
 
-完整字段定义见 `PRD.md` §7；分步模板见 `CONSTRAINTS.md` §5.2。
+完整字段定义见 `docs/PRD.md` §7；分步模板见 `docs/CONSTRAINTS.md` §5.2。
 
 ---
 
 ## 7. 边界纪律（可执行判据）
 
 ```bash
-grep -rnE "<领域词>" src/core src/shared | wc -l             # 必须 0
+grep -rnE "<领域词>" src/core shared | wc -l             # 必须 0
 grep -rn "\.code\|\.evidence\|\.suggestion" src/core | wc -l  # 必须 0
 grep -rn "@mastra/" src --include=*.ts | grep -v "core/runtime/mastra" | wc -l  # 必须 0
 rm -rf src/domains/<x> && npm run build                       # 必须通过
-git diff --numstat <core-tag>..HEAD -- src/core/** src/shared/** | wc -l        # 必须 0
+git diff --numstat <core-tag>..HEAD -- src/core/** shared/** | wc -l        # 必须 0
 ```
 
 最后一条是"可扩展"这个主张**唯一的硬证据**。

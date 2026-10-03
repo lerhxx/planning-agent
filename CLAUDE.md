@@ -10,9 +10,11 @@
 
 | 文件 | 什么时候读 |
 |---|---|
-| `ARCHITECTURE.md` | 动手写代码前 —— 分层、目录、契约在哪 |
-| `CONSTRAINTS.md` | 写任何代码前 —— 完整规则与红线 |
-| `PRD.md` | 需求或验收有疑问时 —— 目标、交互契约、需求池 |
+| `docs/ARCHITECTURE.md` | 动手写代码前 —— 分层、目录、契约在哪 |
+| `docs/CONSTRAINTS.md` | 写任何代码前 —— 完整规则与红线 |
+| `docs/PRD.md` | 需求或验收有疑问时 —— 目标、交互契约、需求池 |
+
+> `techDocs/**` 是**给人看**的技术文档（架构论证、契约参考、面试亮点），**不要**整包塞进 context，按需单篇读。
 
 ---
 
@@ -31,7 +33,7 @@
 8. `src/core/**` 与 `shared/**` 中**禁止出现任何领域词**
 9. 内核**只消费** `validate()` 的 `ok` 与 `violations[].severity`；禁止读/分支 `.code` `.message` `.suggestion` `.evidence`
 10. 触发码必须是内核通用码 `PROVIDER_VALIDATION_FAILED`，禁止领域专有码
-11. `domainExtras` 类型 `unknown`，**内核不可读**（只在写入侧 parse）
+11. 领域自由挂载点 `RunContext.meta`（`Record<string, unknown>`，即设计稿里的 `domainExtras`）**内核不可读**（只在写入侧 parse）
 12. `PlanCompiler` 必须是**纯函数**（可单测、含环检测），不得放在 runtime 目录
 13. 内核只依赖 `RuntimeAdapter` 接口，不依赖具体实现
 14. 重规划后**已完成 step 的 id 不得改变**（天然幂等键）

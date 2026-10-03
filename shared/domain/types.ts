@@ -1,5 +1,5 @@
 /**
- * ★ Domain Pack 契约（zod 4 唯一真源）—— 见 `PRD.md` §7。
+ * ★ Domain Pack 契约（zod 4 唯一真源）—— 见 `docs/PRD.md` §7。
  *
  * 设计约定：
  * - **数据段**（meta / ui 元数据 / prompts / planning 元数据 / evaluation 元数据）用 zod 定义，类型一律 `z.infer`。

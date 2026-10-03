@@ -50,7 +50,7 @@ Goal ──▶ Planner ──▶ Plan（一等公民数据）
         （tools / providers / ui / prompts / planning / evaluation）
 ```
 
-**铁律**：`src/core/**` 与 `src/shared/**` 中不出现任何领域词；删除任一 `domains/*` 目录仍可编译运行。
+**铁律**：`src/core/**` 与 `shared/**` 中不出现任何领域词；删除任一 `domains/*` 目录仍可编译运行。
 
 ---
 
@@ -112,8 +112,8 @@ npm run dev
 |---|---|
 | `CLAUDE.md` | 常驻规则（短，每次都进 context）：红线 + 目录 + 文档指针 |
 | `AGENTS.md` | → 符号链接到 `CLAUDE.md`（兼容读 AGENTS.md 的工具） |
-| `CONSTRAINTS.md` | 完整约束文档（按需读） |
-| `ARCHITECTURE.md` | 架构地图（动手写代码前读） |
+| `docs/CONSTRAINTS.md` | 完整约束文档（按需读） |
+| `docs/ARCHITECTURE.md` | 架构地图（动手写代码前读） |
 
 > ⚠️ `next.config.ts` 必须设 `serverExternalPackages: ['@mastra/*']`，否则打包会炸。
 
@@ -125,24 +125,27 @@ npm run dev
 |---|---|---|
 | **M1** | 内核 + MockRuntime + 通用 UI | 目标 → 计划 → 执行 → 重规划 闭环跑通 |
 | **M2** | 接入第一个 Domain Pack | 领域能用内核跑通，且 `core/**` 无改动 |
-| **M3** | 接入第二个 Domain Pack（不同约束形状） | **`git diff --numstat m2-only..HEAD -- src/core/** src/shared/** \| wc -l` → 0** |
+| **M3** | 接入第二个 Domain Pack（不同约束形状） | **`git diff --numstat m2-only..HEAD -- src/core/** shared/** \| wc -l` → 0** |
 | **M4** | 打磨 + 双部署 | 在线链接 + README 演示 |
 
 **M3 是"可扩展"这个主张唯一的硬证据** —— 口头声称没有说服力，`git diff` 才有。
 
 ---
 
-## 8. 文档（三层分工）
+## 8. 文档（四层分工）
 
-| 文件 | 谁读 | 什么时候进 context |
+| 位置 | 谁读 | 什么时候进 context |
 |---|---|---|
 | `CLAUDE.md` / `AGENTS.md` | AI | **每次都读**（刻意保持简短，只有红线与指针） |
-| `ARCHITECTURE.md` | AI | 动手写代码前读（地图：目录、契约在哪、数据流） |
-| `CONSTRAINTS.md` | AI + 你 | 写具体代码时按需读（完整规则、理由、Prompt 模板） |
-| `PRD.md` | 你 + AI | 需求/验收有疑问时读 |
+| `docs/ARCHITECTURE.md` | AI | 动手写代码前读（地图：目录、契约在哪、数据流） |
+| `docs/CONSTRAINTS.md` | AI + 你 | 写具体代码时按需读（完整规则、理由、Prompt 模板） |
+| `docs/PRD.md` | 你 + AI | 需求/验收有疑问时读 |
+| `techDocs/**` | **你（人）** | **不进 context** —— 架构论证、契约参考、面试亮点 |
 | `README.md` | 你 | 本文件 |
 
 **为什么分成这样**：常驻 context 的文件必须短，否则稀释注意力；而长篇论证文档（选型对比、历史决策）**不应该进 context**——它腐烂得比代码快，且 AI 抓不到重点。
+
+**目录约定**：`docs/` = 驱动 AI 的规则与需求（短、可执行判据）；`techDocs/` = 给人看的技术文档（深、可论证、面试用）。
 
 **架构最可靠的载体是代码里的 zod schema，不是 Markdown**：`shared/plan/types.ts` 永远不会和实现对不上，因为它就是实现。
 
@@ -150,7 +153,7 @@ npm run dev
 
 ## 9. 新增一个领域
 
-只需要新增 `src/domains/<id>/` 一个目录，实现 `DomainPack` 的 8 段契约（见 `PRD.md` §7），然后在两个桶文件里各加一行：
+只需要新增 `src/domains/<id>/` 一个目录，实现 `DomainPack` 的 8 段契约（见 `docs/PRD.md` §7），然后在两个桶文件里各加一行：
 
 ```ts
 // src/domains/index.ts（服务端桶）
@@ -170,7 +173,7 @@ export function registerAllUI(): void {
 
 **内核不应有任何改动**——如果改了，说明抽象破了。生产代码里的引用点数量保持不变（仍是 2 个文件 2 处 import）。
 
-详细的分步模板见 `CONSTRAINTS.md` §5「Prompt 片段库 · 新增一个 Domain Pack」。
+详细的分步模板见 `docs/CONSTRAINTS.md` §5「Prompt 片段库 · 新增一个 Domain Pack」，完整开发指南见 `techDocs/04-DomainPack开发指南.md`。
 
 ---
 

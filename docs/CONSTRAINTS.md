@@ -39,7 +39,7 @@ AI 编码工具的默认行为是**按最常见写法生成代码**。它不知�
 
 | 抽象要求 | ❌ 坏写法 | ✅ 好写法 |
 |---|---|---|
-| 内核要通用 | "内核不要耦合业务" | "`grep -rnE \"<领域词>\" src/core src/shared` 输出必须为空；`rm -rf src/domains/<x> && npm run build` 必须通过。判据：CI 跑该命令。" |
+| 内核要通用 | "内核不要耦合业务" | "`grep -rnE \"<领域词>\" src/core shared` 输出必须为空；`rm -rf src/domains/<x> && npm run build` 必须通过。判据：CI 跑该命令。" |
 | 模型输出不可信 | "注意校验模型输出" | "所有来自模型/网络的 JSON 必须过 `schema.safeParse`，失败降级为 `RawPayloadCard`，绝不白屏。" |
 | 事实不能编造 | "价格要让模型小心" | "`producesFacts: true` 的工具，其返回必须带 `source: SourceRef`；模型输出的事实字段一律丢弃。" |
 
@@ -101,8 +101,8 @@ app/api/**       服务端代码唯一入口（Route Handler）
 
 ## L4 接口契约（唯一真源，改这里必须同步改 PRD.md）
 
-- `DomainPack`：8 段（meta / tools / providers / ui / prompts / planning / evaluation / lifecycle）
-- `Plan` / `Step` / `Goal`：字段定义见 `PRD.md` §8，此处不复制
+- `DomainPack`：共 8 段（meta / tools / providers / ui / prompts / planning / evaluation / lifecycle），**其中 7 段必填、`lifecycle` 可选** —— 必填集合见 `shared/domain/types.ts` 的 `REQUIRED_DOMAIN_PACK_SEGMENTS`，缺一段则 `registerDomainPack` 注册失败
+- `Plan` / `Step` / `Goal`：字段定义见 `docs/PRD.md` §8，此处不复制
 - `ProviderAdapter.search()` 返回 `ProviderResult<T>`，**必须带 `source: SourceRef`**
 - `ValidatingProvider.validate()` 返回 `{ ok, violations[] }`
 - 组件契约：`{ type, props, status, nodeId }`，props 全程可缺失（未补齐渲染骨架，不报错）
@@ -126,7 +126,7 @@ app/api/**       服务端代码唯一入口（Route Handler）
 10. NEVER 在内核中解析 `violations[].code` / `.message` / `.suggestion` / `.evidence`
 11. NEVER 对 `violations[].code` 做 `switch` / `if` 分支
 12. NEVER 用领域专有错误码（触发码必须是内核通用码 `PROVIDER_VALIDATION_FAILED`）
-13. NEVER 让内核读取 `domainExtras`（类型 `unknown`，只在写入侧 parse、读取侧由域组件校验）
+13. NEVER 让内核读取领域自由挂载点 `RunContext.meta`（`Record<string, unknown>`，设计稿里称 `domainExtras`；只在写入侧 parse、读取侧由域组件校验）
 14. NEVER 把 PlanCompiler 放进 runtime 目录，或让它产生副作用
 15. NEVER 让内核依赖具体 Runtime 实现（只依赖 `RuntimeAdapter` 接口）
 16. NEVER 在重规划时改变已完成 step 的 id
@@ -137,7 +137,7 @@ app/api/**       服务端代码唯一入口（Route Handler）
 ## 每次改动后必须自检（并贴出结果）
 
 npm run typecheck && npm run lint && npm test
-grep -rnE "<领域词>" src/core src/shared | wc -l        # 必须为 0
+grep -rnE "<领域词>" src/core shared | wc -l        # 必须为 0
 grep -rn "\.code\|\.evidence\|\.suggestion" src/core | wc -l   # 必须为 0
 rm -rf src/domains/<x> && npm run build                  # 必须通过
 ```
@@ -152,7 +152,7 @@ rm -rf src/domains/<x> && npm run build                  # 必须通过
 |---|---|
 | `/CLAUDE.md` `/AGENTS.md` `/.cursorrules` | 上面第二部分（四层纪律 + 红线） |
 | `src/core/.cursorrules` | 禁领域词、禁解析 violations details、PlanCompiler 纯函数、只依赖 `RuntimeAdapter` |
-| `src/domains/*/.cursorrules` | 8 段必须提供、`producesFacts` 必带 `SourceRef`、禁跨域引用、禁 `@mastra/*` |
+| `src/domains/*/.cursorrules` | 7 段必填齐全（`lifecycle` 可选）、`producesFacts` 必带 `SourceRef`、禁跨域引用、禁 `@mastra/*` |
 | `src/core/runtime/mastra/.cursorrules` | tool 必须带 zod `inputSchema`、模型名走 `models.ts`、禁 Dynamic Workflows |
 | `src/components/generative-ui/.cursorrules` | 必须注册进注册表、必须有 zod schema、三个兜底组件为通用实现 |
 
@@ -214,7 +214,7 @@ rm -rf src/domains/<x> && npm run build                  # 必须通过
 
 ```
 在 src/domains/<id>/ 下新增领域包 <id>。
-必须提供 DomainPack 的 8 段：meta / tools / providers / ui / prompts / planning / evaluation / lifecycle。
+必须提供 DomainPack 的 **7 段必填**：meta / tools / providers / ui / prompts / planning / evaluation（`lifecycle` 是第 8 段，可选）。缺任一段则注册失败。
 硬要求：
 1. tools 的每项必须带 zod inputSchema；producesFacts=true 的必须返回 SourceRef
 2. providers 必须实现 ProviderAdapter，返回值带 source；可选实现 createValidator
@@ -224,9 +224,9 @@ rm -rf src/domains/<x> && npm run build                  # 必须通过
 6. 不得引用任何 @mastra/*（工具实现交给 RuntimeAdapter）
 7. 不得引用其他领域包
 8. 完成后必须验证：
-   - grep 领域词 src/core src/shared → 0 命中
+   - grep 领域词 src/core shared → 0 命中
    - rm -rf src/domains/<id> && npm run build → 通过
-   - git diff --numstat <core-tag>..HEAD -- src/core/** src/shared/** | wc -l → 0
+   - git diff --numstat <core-tag>..HEAD -- src/core/** shared/** | wc -l → 0
 ```
 
 ## 5.3 新增一个流式事件（data part）
@@ -263,7 +263,7 @@ rm -rf src/domains/<x> && npm run build                  # 必须通过
 npm run typecheck && npm run lint && npm test
 
 # 1. 内核无领域词
-grep -rnE "<领域词>" src/core src/shared | wc -l                 # → 0
+grep -rnE "<领域词>" src/core shared | wc -l                 # → 0
 
 # 2. 内核不读领域语义
 grep -rn "\.code\|\.evidence\|\.suggestion" src/core | wc -l      # → 0
@@ -275,7 +275,7 @@ rm -rf src/domains/<x> && npm run build                          # → 通过
 npm test -- src/core/compiler
 
 # 5. 可扩展性证据
-git diff --numstat <core-tag>..HEAD -- src/core/** src/shared/** | wc -l   # → 0
+git diff --numstat <core-tag>..HEAD -- src/core/** shared/** | wc -l   # → 0
 ```
 
 **五项全绿才算"这次改动没有破坏架构"。** 任何一项红了就修，不要带着红灯继续写。

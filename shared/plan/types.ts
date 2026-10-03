@@ -6,7 +6,7 @@
  * - 本文件位于 `shared/**`，因此 **禁止出现任何领域词**（领域名 / 领域概念 / 领域字段名）。
  * - 模型与网络过来的 JSON 一律 `schema.safeParse` 后再消费。
  *
- * 字段口径见 `PRD.md` §8。
+ * 字段口径见 `docs/PRD.md` §8。
  */
 import { z } from 'zod';
 
@@ -258,7 +258,7 @@ export type ClarifyQuestion = z.infer<typeof zClarifyQuestion>;
 
 /**
  * 计划编辑命令。**放在 shared 是因为 `/api/run` 的请求体要带它**（前后端唯一真源）。
- * 语义见 `PRD.md` §6.2 / §6.3。
+ * 语义见 `docs/PRD.md` §6.2 / §6.3。
  */
 export const zEditCommand = z.discriminatedUnion('kind', [
   z.object({

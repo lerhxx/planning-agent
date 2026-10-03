@@ -5,7 +5,7 @@
 | 文档版本 | v1.0（2026-10-02） |
 | 范围 | **仅基座（内核）**。不含任何具体领域的实现 |
 | 读者 | 架构实现、前端实现（vibe coding） |
-| 配套文档 | `README.md`（分层与目录）、`CONSTRAINTS.md`（vibe coding 约束） |
+| 配套文档 | `README.md`（分层与目录）、`docs/CONSTRAINTS.md`（vibe coding 约束）、`docs/ARCHITECTURE.md`（架构地图） |
 
 ---
 
@@ -145,7 +145,9 @@ Plan 状态机：`draft → approved → running → paused / replanning → com
 
 ## 7. ★ Domain Pack 契约（扩展点）
 
-一个领域必须提供以下 **8 段**。这是"可扩展"的命根子。
+一个领域必须提供以下 **8 段**（**其中 7 段必填，第 8 段 `lifecycle` 可选**）。这是"可扩展"的命根子。
+
+> 注册守卫看的是 `shared/domain/types.ts` 的 `REQUIRED_DOMAIN_PACK_SEGMENTS`，它**只含 7 段**（不含 `lifecycle`）。缺任一段 → `registerDomainPack` 注册失败。
 
 ```ts
 export interface DomainPack {
@@ -456,7 +458,7 @@ export interface Plan {
 ```bash
 git tag m1-core-only
 # 接入第一个领域后
-git diff --numstat m1-core-only..HEAD -- src/core/** src/shared/** | wc -l   # → 0
+git diff --numstat m1-core-only..HEAD -- src/core/** shared/** | wc -l   # → 0
 # 接入第二个（约束形状不同的）领域后，再跑一次，仍必须为 0
 rm -rf src/domains/<second> && npm run build    # 反向剥离验证
 ```
