@@ -19,7 +19,7 @@ import {
   createTripProviders,
   validateTripPlan,
 } from '@/src/domains/travel/providers';
-import { listVisionRecords, VISION_FIXTURES } from '@/src/domains/travel/providers/vision';
+import { listVisionRecords } from '@/src/domains/travel/providers/vision';
 import { makePlan, makeStep } from './fixtures';
 
 const CTX = zRunContext.parse({
@@ -160,15 +160,35 @@ describe('★ K12 回归锁：ok:false 的步骤结果不得被当成事实', ()
   });
 });
 
-describe('vision.ts 占位（第二批填内容）', () => {
-  it('空 fixture 表下：任何 assetId 都落到 unresolved，不编造也不丢弃', () => {
-    expect(Object.keys(VISION_FIXTURES)).toHaveLength(0);
-    const result = listVisionRecords(['a-1', 'a-2', 'a-1']);
+describe('vision.ts 数据源（fixture，零网络零密钥）', () => {
+  it('未收录的名字 → unresolved：不编造、不丢弃，按入参顺序去重', () => {
+    const result = listVisionRecords([
+      { id: 'a-1', name: '随便一张图.jpg' },
+      { id: 'a-2', name: 'IMG_0002.png' },
+      { id: 'a-1', name: '随便一张图.jpg' },
+    ]);
     expect(result.identified).toEqual([]);
     expect(result.unresolvedAssetIds).toEqual(['a-1', 'a-2']);
   });
 
+  it('★ 收录的名字 → identified：assetId 是真实入参 id，且每条都带 source', () => {
+    const result = listVisionRecords([{ id: 'asset-x', name: '外滩.jpg' }]);
+    expect(result.unresolvedAssetIds).toEqual([]);
+    expect(result.identified).toHaveLength(1);
+    expect(result.identified[0].assetId).toBe('asset-x');
+    expect(result.identified[0].identifiedName).toBe('外滩');
+    expect(result.identified[0].source.length).toBeGreaterThan(0);
+    expect(result.identified[0].confidence).toBeGreaterThan(0);
+  });
+
+  it('去扩展名匹配：@外滩 与 外滩.jpg 命中同一条 fixture', () => {
+    const withExt = listVisionRecords([{ id: 'x', name: '外滩.jpg' }]);
+    const noExt = listVisionRecords([{ id: 'x', name: '外滩' }]);
+    expect(noExt.identified[0]?.identifiedName).toBe(withExt.identified[0]?.identifiedName);
+  });
+
   it('纯函数：同样入参两次结果一致', () => {
-    expect(listVisionRecords(['a-1'])).toEqual(listVisionRecords(['a-1']));
+    const assets = [{ id: 'a-1', name: '外滩.jpg' }];
+    expect(listVisionRecords(assets)).toEqual(listVisionRecords(assets));
   });
 });

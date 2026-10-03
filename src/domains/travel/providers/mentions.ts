@@ -15,7 +15,8 @@
  * ⚠️ 本文件只做**解析**。把三态翻译成 `ClarifyField[]` 需要 `zClarifyField` / `image-ref` 字段类型，
  * 等契约 landed 后在同一文件内补齐（设计 §9 / T03 第二批）。
  */
-import type { Attachment } from '@/shared/plan/types';
+import { z } from 'zod';
+import { zClarifyField, type Attachment, type ClarifyField } from '@/shared/plan/types';
 
 /** 提及解析只需要附件的这两个字段（从契约类型 `Attachment` 派生，不手写第二份）。 */
 export type MentionableAsset = Pick<Attachment, 'id' | 'name'>;
@@ -147,6 +148,68 @@ function scanMentions(text: string): RawMention[] {
     index = end;
   }
   return raw;
+}
+
+/* ------------------------------------------------------------------ *
+ * 三态 → 澄清载荷（PRD §3.4 / K15）
+ * ------------------------------------------------------------------ */
+
+/** 歧义提示：不是错误，是"这个名称命中了 N 张，说明已同时关联"的明示（K2）。 */
+export const zAmbiguousNotice = z.object({
+  token: z.string().min(1),
+  assetIds: z.array(z.string()).default([]),
+});
+export type AmbiguousNotice = z.infer<typeof zAmbiguousNotice>;
+
+export interface MentionClarifyPayload {
+  /**
+   * 需要用户决策的字段（**没有 unresolved 时恒为 `[]`**）。
+   *
+   * ★ `kind` 用 `image-ref`：它不是"图片字段"，而是"从本次输入的附件里挑一个"的 select（K15），
+   * 候选 = 本轮 attachments，`option.id` = `assetId`。内核不解析其值。
+   */
+  fields: ClarifyField[];
+  /** 歧义明示（UI 必须显示，绝不静默挑第一个）。 */
+  ambiguousNotices: AmbiguousNotice[];
+}
+
+/** 一个 unresolved 提及对应的字段 id（含单冒号是安全的：`parseFormKey` 按最后一个 `::` 切）。 */
+function mentionFieldId(token: string): string {
+  return `mention:${token}`;
+}
+
+/**
+ * 把三态翻译成澄清载荷。**纯函数**。
+ *
+ * - `unresolved` → 每个 token 一个 `image-ref` 字段，让用户挑"这段说明指哪张图"；
+ *   **不预选**（`default` 不给值），也不设 required —— 用户可以留空（表示放弃这段说明）。
+ * - `ambiguous` → **不打断**（已经全关联了），只产出一条必须被 UI 明示的提示。
+ * - `matched` → 什么都不做。
+ */
+export function buildMentionClarifyPayload(
+  parsed: ParsedImageMentions,
+  assets: readonly MentionableAsset[],
+): MentionClarifyPayload {
+  const options = (assets ?? []).map((asset) => ({ id: asset.id, label: asset.name }));
+
+  const fields: ClarifyField[] = parsed.mentions
+    .filter((mention) => mention.state === 'unresolved')
+    .map((mention) =>
+      zClarifyField.parse({
+        id: mentionFieldId(mention.token),
+        kind: 'image-ref',
+        label: `「${mention.token}」指的是哪张图？`,
+        description: '留空表示这段说明不关联任何图片',
+        required: false,
+        options,
+      }),
+    );
+
+  const ambiguousNotices: AmbiguousNotice[] = parsed.mentions
+    .filter((mention) => mention.state === 'ambiguous')
+    .map((mention) => zAmbiguousNotice.parse({ token: mention.token, assetIds: mention.assetIds }));
+
+  return { fields, ambiguousNotices };
 }
 
 /** 解析文本里的 `@+图片名` 提及。**纯函数**：同样的 (text, assets) → 同样的三态结果。 */

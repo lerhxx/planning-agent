@@ -14,6 +14,7 @@
 import { z } from 'zod';
 import type { ValidationResult } from '@/shared/domain/types';
 import type { Plan } from '@/shared/plan/types';
+import type { RunContext } from '@/shared/run/types';
 import {
   MAX_ITEMS_PER_DAY,
   composeItinerary,
@@ -30,6 +31,41 @@ import {
 } from './poi';
 
 export const VALIDATOR_ID = 'travel.validator';
+
+/** 图片理解步骤的 step.type（与 `planning.ts` 的常量同源语义，这里不 import 避免 planning↔providers 环）。 */
+export const IMAGE_UNDERSTAND_STEP_TYPE = 'image_understand';
+export const ITINERARY_COMPOSE_STEP_TYPE = 'itinerary_compose';
+
+/** 已进入终态、不会再变的步骤状态（"澄清无果"的判定前提）。 */
+const SETTLED_STEP_STATUSES: readonly string[] = ['done', 'failed', 'skipped', 'cancelled'];
+
+/**
+ * 图片理解步骤的产出（**单一真源**：K5 —— 领域只读 `result.data`，不读 `answers`）。
+ *
+ * 用宽松 schema：字段缺失要能被识别出来而不是让整条校验炸掉。
+ */
+export const zImageUnderstandData = z.object({
+  identified: z
+    .array(z.object({ assetId: z.string().default(''), identifiedName: z.string().optional() }))
+    .default([]),
+  unresolved: z.array(z.string()).default([]),
+  skippedAssetIds: z.array(z.string()).default([]),
+  mentions: z
+    .object({
+      unresolvedTokens: z.array(z.string()).default([]),
+      ambiguousTokens: z.array(z.string()).default([]),
+    })
+    .optional(),
+});
+export type ImageUnderstandData = z.infer<typeof zImageUnderstandData>;
+
+/** 编排步骤产出的覆盖度（由 `compose.ts` 计算，这里只读不重算）。 */
+const zComposeCoverage = z.object({
+  missingAssetIds: z.array(z.string()).default([]),
+  skippedAssetIds: z.array(z.string()).default([]),
+});
+
+const zComposeData = z.object({ coverage: zComposeCoverage.optional() });
 
 /* ------------------------------------------------------------------ *
  * 从 Plan 还原口径
@@ -201,8 +237,10 @@ interface TravelViolation {
  *
  * 违规只暴露 `severity`；`code` / `message` / `suggestion` 是给**人与日志**看的，
  * 内核按契约不会去读它们（红线 9/10）。
+ *
+ * @param ctx 可选。给了才知道"本轮有没有带图片"，用于判定「澄清路径不可用」。
  */
-export function validateTripPlan(plan: Plan): ValidationResult {
+export function validateTripPlan(plan: Plan, ctx?: RunContext): ValidationResult {
   const violations: TravelViolation[] = [];
   const { brief, declaredDays } = readPlanBrief(plan);
 
@@ -315,6 +353,74 @@ export function validateTripPlan(plan: Plan): ValidationResult {
       message: `有 ${grouped.dropped} 条已产出的事实因字段缺失（名称 / 类别 / 来源）未计入成本重算，当前总价 ¥${itinerary.totalCostCNY} 可能偏低`,
       suggestion: '检查上游 Provider 的返回完整性；缺来源的条目不得参与编排',
     });
+  }
+
+  /* ⑥ 图片流程：★ 只在 image_understand 进入**终态**后才校验（§3.2 口径 2） */
+  // "未覆盖即 error"若不限定终态，首轮校验时该步骤还没执行 → 每个 run 开局就被拦，一步都跑不了。
+  const imageSteps = plan.steps.filter((step) => step.type === IMAGE_UNDERSTAND_STEP_TYPE);
+  const imageStep = imageSteps[0];
+  const imageKindCount = (ctx?.attachments ?? []).filter((item) => item.kind === 'image').length;
+
+  if (imageStep) {
+    const settled = SETTLED_STEP_STATUSES.includes(imageStep.status);
+    if (settled) {
+      const data = zImageUnderstandData.safeParse(imageStep.result?.data ?? {});
+      const unresolved = data.success ? data.data.unresolved : [];
+      const skipped = new Set(data.success ? data.data.skippedAssetIds : []);
+      // ★ 已显式跳过的不再算未决：用户做过决策了，不该再把他拦下来。
+      const stillUnresolved = unresolved.filter((id) => !skipped.has(id));
+
+      // ① 澄清无果（步骤已 done 而 unresolved 仍非空）或 ② 澄清路径不可用（该步骤 failed）
+      if (stillUnresolved.length > 0 || imageStep.status === 'failed') {
+        violations.push({
+          severity: 'error',
+          code: 'IMAGE_UNRESOLVED',
+          message:
+            imageStep.status === 'failed'
+              ? `图片理解步骤 ${imageStep.id} 已失败，无法确认图片内容`
+              : `还有 ${stillUnresolved.length} 张图片没认出来，也没有被跳过`,
+          suggestion: '补充图片信息，或显式选择跳过这几张',
+        });
+      }
+
+      // `@` 提及 0 命中且步骤已终态 → 走 error（PRD §3.4 的备选路径：澄清无果后兜底）
+      const mentionTokens = data.success ? (data.data.mentions?.unresolvedTokens ?? []) : [];
+      if (imageStep.status === 'done' && mentionTokens.length > 0) {
+        violations.push({
+          severity: 'error',
+          code: 'IMAGE_MENTION_UNRESOLVED',
+          message: `有 ${mentionTokens.length} 处 @提及没有匹配到任何图片，说明没有被关联到图上`,
+          suggestion: '改成一个已上传图片的名字，或删掉这段提及',
+        });
+      }
+    }
+    // ★ 步骤仍在 pending / running / awaiting_user → 一律不报（用户还在决策，不能替他判定）。
+  } else if (imageKindCount > 0) {
+    // ② 澄清路径不可用：本轮带了图片，计划里却没有图片理解步骤。
+    violations.push({
+      severity: 'error',
+      code: 'IMAGE_UNRESOLVED',
+      message: `本轮带了 ${imageKindCount} 张图片，但计划里没有图片理解步骤，图片内容不会被使用`,
+      suggestion: '补一个图片理解步骤，或去掉图片后重新规划',
+    });
+  }
+
+  /* ⑦ 覆盖度：漏排 → error，但**数值**走 props（§3.2 口径 4：覆盖率不靠违规通道可见） */
+  for (const step of plan.steps.filter((item) => item.type === ITINERARY_COMPOSE_STEP_TYPE)) {
+    if (step.status !== 'done') continue;
+    const parsed = zComposeData.safeParse(step.result?.data ?? {});
+    const coverage = parsed.success ? parsed.data.coverage : undefined;
+    const missing = (coverage?.missingAssetIds ?? []).filter(
+      (id) => !(coverage?.skippedAssetIds ?? []).includes(id),
+    );
+    if (missing.length > 0) {
+      violations.push({
+        severity: 'error',
+        code: 'IMAGE_COVERAGE_MISSING',
+        message: `行程漏排了 ${missing.length} 张已识别的图片，未满足"行程须涵盖所有图片"`,
+        suggestion: '把这批图片对应的条目排进行程，或让用户显式跳过',
+      });
+    }
   }
 
   return {
