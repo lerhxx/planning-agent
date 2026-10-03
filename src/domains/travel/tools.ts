@@ -65,12 +65,36 @@ export const ASSET_FIELD_PREFIX = 'asset:';
  * ------------------------------------------------------------------ */
 
 /**
- * 读 `ctx.meta.answers`（引擎把 `input.answers` 过桥到这里）。
+ * 读 `ctx.meta.answers`（引擎把 `input.answers` 过桥到这里，`engine.ts:269`）。
  *
- * ⚠️ 与 K5「只读 `result.data`」的字面偏差：`retryStep` 会**清空**该步骤的 `result`
- * （`edit.ts:238`），所以"用户上一轮选了什么"只可能来自 `answers`。
- * 但**下游**（compose / planCheck）仍然只读 `result.data` —— 单一真源的边界没有被破坏：
- * 本工具在每一轮都把决策结果重新写进 `result.data.skippedAssetIds`。
+ * ★★★ 为什么这里读 `answers`，而不是读 `result.data`？（三件事，改代码前请读完）★★★
+ *
+ * ① 「用户上一轮选了什么」**根本不在 `result.data` 里**。
+ *    `result.data` 是**本工具上一轮的产出**；`answers` 才是用户本人的输入。
+ *    想从产出里反推用户输入，本身就绕了一层，而且推不出来（澄清轮 `ok:false`，
+ *    `result.data.skippedAssetIds` 恒为 `[]`）。
+ *
+ * ② `retryStep` 会把该步骤的 `result` 清空成 `undefined`
+ *    （`src/core/planning/edit.ts:238`，`result: undefined` + `status: 'pending'`）。
+ *    所以在"发澄清 → 用户填表 → retryStep 重跑"这条主链路上，
+ *    若改成读 `result.data`，拿到的**必然是 `undefined`**。
+ *
+ * ③ ⚠️ 明确警告：**不要"顺手"把它改成读 `result.data`**——那看起来更自然，但是错的。
+ *    后果链：retryStep 清 result → 读不到"已跳过" → 本轮重新判定为"未识别"
+ *    → 再次发澄清 → 用户再选一次跳过 → 再 retryStep 再清空……
+ *    即：**用户跳过的图会重新变成未识别并被反复拦截，形成死循环**，
+ *    而且每一步单独看都"完全合理"（没报错、没丢数据、只是又问了一次）。
+ *    这正是"静默"失败类型最难查的一种：**没有异常，只有用户永远走不出去。**
+ *
+ * ❤️‍🩹 与 K5「领域只读 `result.data`」的字面偏差，是有意为之：
+ *    K5 要防的是「领域绕过 Provider 编造事实」，而 `answers` 是**用户输入**不是事实来源，
+ *    读它不违反红线 16。下游（compose / planCheck）仍然只读 `result.data`，
+ *    单一真源的边界没有被破坏——本工具每一轮都把决策结果重新写进
+ *    `result.data.skippedAssetIds`（`zImageUnderstandResult`）。
+ *
+ * 🔒 这条行为由 `src/test/travelV2.test.ts` 的「★ K5 · retryStep 后 skippedAssetIds 仍然可读」
+ *    5 条锁守着（含反向锁：retryStep 但不带 answers → 回到 `awaiting_user`）。
+ *    **改坏了测试会红，但注释是给改代码的人看的——两个都要。**
  */
 function readAnswers(ctx: RunContext): Record<string, string> {
   const raw = ctx.meta['answers'];
@@ -393,6 +417,8 @@ export const travelTools: ToolSet = {
       const attachments = imageAttachments(ctx);
       const vision = listVisionRecords(attachments);
       const mentions = parseImageMentions(goalText, attachments);
+      // ★ 读 `answers`（不是 `result.data`）：`retryStep` 会清空本步骤的 result，
+      //   "用户选了跳过"只可能存在这里。详见 `readAnswers` 的注释——**勿改**。
       const answers = readAnswers(ctx);
 
       // ① 用户在表单里补的名字（不是 Provider 识别的，单独归类）
@@ -595,6 +621,7 @@ export const travelTools: ToolSet = {
       /* ---- 图片侧：与检索口径一致地重新识别一遍（幂等，零副作用） ---- */
       const attachments = imageAttachments(ctx);
       const vision = listVisionRecords(attachments);
+      // ★ 同上：这里也必须读 `answers`（compose 是重试链路的下游，result 同样会被清空）。
       const answers = readAnswers(ctx);
       const skipped =
         readMultiAnswer(answers, IMAGE_QUESTION_ID, UNRESOLVED_ACTION_FIELD).includes(
