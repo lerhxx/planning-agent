@@ -11,12 +11,15 @@ import { CORE_DEGRADE_CHAIN, type DomainUIContribution } from '@/shared/domain/t
 import type { RunContext } from '@/shared/run/types';
 import type { Step } from '@/shared/plan/types';
 import { CATEGORY_LABEL, MAX_ITEMS_PER_DAY, type TripCategory } from './providers';
-import { zItineraryComposeResult, zPoiSearchResult } from './tools';
+import { IMAGE_UNDERSTAND_STEP_TYPE } from './planning';
+import { zImageUnderstandResult, zItineraryComposeResult, zPoiSearchResult } from './tools';
 import { zPoiCardProps } from './components/PoiCard/schema';
 import { zItineraryCardProps } from './components/ItineraryCard/schema';
+import { zVisionResultCardProps } from './components/VisionResultCard/schema';
 
 export const POI_CARD_COMPONENT = 'PoiCard';
 export const ITINERARY_CARD_COMPONENT = 'ItineraryCard';
+export const VISION_RESULT_CARD_COMPONENT = 'VisionResultCard';
 
 const DEGRADED_DISCLAIMER = '结果格式异常，已降级为原始载荷';
 
@@ -38,6 +41,15 @@ export const travelUI: DomainUIContribution = {
       name: ITINERARY_CARD_COMPONENT,
       description: '行程卡片：按天展示编排结果、每日花费与总预算对照',
       schema: zItineraryCardProps,
+      requiredProps: ['title'],
+      modelCallable: false,
+      lazy: true,
+    },
+    {
+      name: VISION_RESULT_CARD_COMPONENT,
+      description:
+        '识别结果卡片：逐张列出图片识别结果（名称 / 识别名 / 置信度 / 来源），未识别与已跳过的都列出来',
+      schema: zVisionResultCardProps,
       requiredProps: ['title'],
       modelCallable: false,
       lazy: true,
@@ -152,6 +164,54 @@ export const travelUI: DomainUIContribution = {
           ...(coverage && coverage.missingAssetIds.length > 0
             ? { note: `有 ${coverage.missingAssetIds.length} 张已识别的图片没排进行程` }
             : {}),
+        };
+      },
+    },
+
+    [IMAGE_UNDERSTAND_STEP_TYPE]: {
+      component: VISION_RESULT_CARD_COMPONENT,
+      toProps(result: unknown, step: Step, ctx: RunContext): Record<string, unknown> {
+        const parsed = zImageUnderstandResult.safeParse(result ?? {});
+        if (!parsed.success) {
+          return {
+            title: step.title,
+            items: [],
+            unresolvedAssetIds: [],
+            skippedAssetIds: [],
+            disclaimer: DEGRADED_DISCLAIMER,
+            isEstimate: true,
+          };
+        }
+
+        const data = parsed.data;
+        // 文件名只在 `ctx.attachments` 里（工具结果只带 assetId）：这里是**纯查表**，
+        // 不重新识别、不补默认值，查不到就留空（UI 侧绝不参与"认图"这件事）。
+        const nameOf = new Map(
+          (ctx.attachments ?? [])
+            .filter((item) => item.kind === 'image')
+            .map((item) => [item.id, item.name] as const),
+        );
+
+        return {
+          title: step.title,
+          /** 置信度与 source 都来自 `result.data`（Provider 产出），UI 不加工（红线 16）。 */
+          items: data.identified.map((record) => ({
+            assetId: record.assetId,
+            name: nameOf.get(record.assetId) ?? '',
+            identifiedName: record.identifiedName,
+            confidence: record.confidence ?? 0,
+            source: record.source ?? '',
+          })),
+          unresolvedAssetIds: data.unresolved,
+          skippedAssetIds: data.skippedAssetIds,
+          // 用户补的名字**不是识别结果**，单独说明，避免被当成"认出来了"。
+          ...(data.userIdentified.length > 0
+            ? {
+                note: `另有 ${data.userIdentified.length} 张按你补的名字参与规划（不是识别结果）`,
+              }
+            : {}),
+          disclaimer: data.disclaimer,
+          isEstimate: true,
         };
       },
     },

@@ -174,7 +174,16 @@ export type ItineraryComposeResult = z.infer<typeof zItineraryComposeResult>;
 
 export const zImageUnderstandResult = z.object({
   identified: z
-    .array(z.object({ assetId: z.string().default(''), identifiedName: z.string().default('') }))
+    .array(
+      z.object({
+        assetId: z.string().default(''),
+        identifiedName: z.string().default(''),
+        /** ★ 置信度是**数值事实**，只能来自 Provider（红线 16），模型不得编造；缺省即"Provider 没给"。 */
+        confidence: z.number().min(0).max(1).optional(),
+        /** ★ 反幻觉：每条已识别项都要能点开看来源（`VisionResultCard` 逐条展示）。 */
+        source: z.string().optional(),
+      }),
+    )
     .default([]),
   unresolved: z.array(z.string()).default([]),
   skippedAssetIds: z.array(z.string()).default([]),
@@ -469,6 +478,8 @@ export const travelTools: ToolSet = {
             identified: vision.identified.map((record) => ({
               assetId: record.assetId,
               identifiedName: record.identifiedName,
+              confidence: record.confidence,
+              source: record.source,
             })),
             unresolved: stillUnresolved,
             skippedAssetIds: [],
@@ -502,6 +513,8 @@ export const travelTools: ToolSet = {
           identified: vision.identified.map((record) => ({
             assetId: record.assetId,
             identifiedName: record.identifiedName,
+            confidence: record.confidence,
+            source: record.source,
           })),
           unresolved: [],
           skippedAssetIds: skipped ? vision.unresolvedAssetIds : [],
