@@ -70,6 +70,23 @@ grep -rn "\.code\|\.evidence\|\.suggestion" src/core | wc -l # → 0
 rm -rf src/domains/<x> && npm run build                     # → 通过
 ```
 
+### ⚠️ 上面这几条 grep 守卫，用 bash 跑会「假通过」
+
+bash `grep` 在本环境会**静默失败并返回 0**：中文关键词、`--include=*.ts` 这类未加引号的通配符
+都可能匹配不到任何东西。而 `0` **恰好就是这些守卫的通过值** —— 守卫会因为工具失效而假通过，
+而且**看不出来**（你只会看到一行 `0`，和真的干净一模一样）。
+
+实测案例：`git show HEAD:src/domains/travel/providers.ts | grep -c "zFactDerivedPoi"` 返回 `0`，实际有 12 处匹配。
+
+**纪律**：校验一律用 Grep 工具；若不得不用 bash grep，**结果为 0 时必须用 Grep 工具复核一次**再说"通过"。
+
+### ⚠️ `npm test` 全绿 ≠ 能提交
+
+vitest **不做类型检查** —— 类型错误在测试里是绿的。出现过 `travelDomain.test.ts` 引用了未 import 的
+常量、`npm test` 依然全绿、只有单独跑 `npm run typecheck` 才红的情况。
+
+**提交前必须单独跑 `npm run typecheck`**，不能用"测试通过了"代替。
+
 ---
 
 ## 不确定时

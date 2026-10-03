@@ -11,13 +11,16 @@ import type { ComponentAction } from '@/src/components/generative-ui/ClarifyOpti
 // 注意：这里只注册**组件**（registerAllUI），刻意不注册领域 pack ——
 // 否则领域 providers/tools 会被拖进客户端 bundle。代价是前端只能用
 // CORE_DEGRADE_CHAIN（领域自定义降级链是服务端概念）。
-import { defaultDomainId, registerAllUI } from '@/src/domains/ui';
+import { defaultDomainId, domainOptions, registerAllUI } from '@/src/domains/ui';
 
 // 前端启动即注册：内核通用兜底组件 + Demo 领域组件的懒加载入口。
 registerAllUI();
 
-const DEFAULT_GOAL =
-  '帮我把这件事拆成计划并一步步执行：两路采集后汇总成一版结论，预算不超过 500 元，三天内完成';
+/**
+ * 示例目标随领域给出，定义在 `src/domains/ui.ts`（领域/客户端桶文件）——
+ * 生产代码对领域的引用点仍然只有 `index.ts`（服务端）与 `ui.ts`（客户端）两个。
+ */
+const { sampleGoal: DEFAULT_GOAL } = domainOptions[0]!;
 
 const SIMULATE_OPTIONS: Array<{ value: NonNullable<StartInput['simulate']>; label: string }> = [
   { value: 'none', label: '正常执行（一次成功）' },
@@ -38,6 +41,7 @@ const EDITABLE_PHASES = new Set(['paused', 'failed', 'awaiting_user', 'aborted']
 export default function Page() {
   const { state, start, abort, reset } = useRun();
   const [goal, setGoal] = useState<string>(DEFAULT_GOAL);
+  const [domainId, setDomainId] = useState<string>(defaultDomainId);
   const [simulate, setSimulate] = useState<NonNullable<StartInput['simulate']>>('none');
   const [replanMode, setReplanMode] = useState<NonNullable<StartInput['replanMode']>>('diverge');
   const [requireConstraints, setRequireConstraints] = useState<boolean>(false);
@@ -56,6 +60,7 @@ export default function Page() {
     if (!state.plan) return;
     void start({
       goal,
+      domainId,
       simulate: 'none',
       replanMode,
       requireConstraints,
@@ -63,6 +68,15 @@ export default function Page() {
       plan: state.plan,
       edit: edit ?? null,
     });
+  };
+
+  // 渲染时用的领域：跟随服务端下发的 plan.domainId，未开跑时用下拉框选的领域。
+  const renderDomainId = state.plan?.domainId ?? domainId;
+
+  // 切换领域时顺带换成该领域的示例目标（示例文案由领域桶文件给出）。
+  const switchDomain = (next: string): void => {
+    setDomainId(next);
+    setGoal(domainOptions.find((option) => option.id === next)?.sampleGoal ?? DEFAULT_GOAL);
   };
 
   const planProps: Partial<PlanViewProps> = useMemo(() => {
@@ -100,7 +114,7 @@ export default function Page() {
     if (action.type !== 'select_option' || !action.questionId || !action.optionId) return;
     const next = { ...answers, [action.questionId]: action.optionId };
     setAnswers(next);
-    void start({ goal, simulate, replanMode, requireConstraints, answers: next });
+    void start({ goal, domainId, simulate, replanMode, requireConstraints, answers: next });
   };
 
   return (
@@ -128,6 +142,19 @@ export default function Page() {
         />
 
         <div className="mt-3 flex flex-wrap items-center gap-3">
+          <select
+            value={domainId}
+            onChange={(event) => switchDomain(event.target.value)}
+            disabled={running}
+            className="rounded-lg border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-slate-200 disabled:opacity-40"
+          >
+            {domainOptions.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+
           <select
             value={simulate}
             onChange={(event) =>
@@ -168,7 +195,7 @@ export default function Page() {
           <button
             type="button"
             disabled={running || goal.trim().length === 0}
-            onClick={() => void start({ goal, simulate, replanMode, requireConstraints, answers })}
+            onClick={() => void start({ goal, domainId, simulate, replanMode, requireConstraints, answers })}
             className="rounded-lg bg-sky-500 px-3 py-1.5 text-xs font-medium text-slate-950 transition hover:bg-sky-400 disabled:opacity-40"
           >
             {running ? '执行中…' : '开始'}
@@ -277,7 +304,7 @@ export default function Page() {
                 <ComponentRenderer
                   key={node.nodeId}
                   node={node}
-                  domainId={defaultDomainId}
+                  domainId={renderDomainId}
                   onAction={onAction}
                 />
               ))}
@@ -291,7 +318,7 @@ export default function Page() {
               <ComponentRenderer
                 key={node.nodeId}
                 node={node}
-                domainId={defaultDomainId}
+                domainId={renderDomainId}
                 onAction={onAction}
               />
             ))}

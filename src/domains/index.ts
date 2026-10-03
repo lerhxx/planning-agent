@@ -9,6 +9,7 @@
  * 因此客户端入口单独放在 `./ui`（`page.tsx` 引它，`route.ts` 不引）。
  */
 import { registerDemoDomain } from './demo/register';
+import { registerTravelDomain } from './travel/register';
 
 /**
  * 注册全部领域包。**幂等**：重复调用只会覆盖同 id 的包。
@@ -16,5 +17,5 @@ import { registerDemoDomain } from './demo/register';
  * @returns 已注册的领域 id 列表（第一个为默认领域）。
  */
 export function registerAllDomains(): string[] {
-  return [registerDemoDomain()];
+  return [registerDemoDomain(), registerTravelDomain()];
 }
