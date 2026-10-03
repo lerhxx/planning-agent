@@ -11,6 +11,7 @@ import {
   isTerminalStepStatus,
   makeReplanStepId,
   zPlan,
+  type Attachment,
   type ClarifyQuestion,
   type EditCommand,
   type Goal,
@@ -57,6 +58,8 @@ export interface EngineInput {
   simulate?: string;
   requireConstraints?: boolean;
   answers?: Record<string, string>;
+  /** 本轮输入附件（引用优先：只带描述符，字节由上传接口先落地）。 */
+  attachments?: Attachment[];
   /** 续跑：上一次的 plan 快照（来自客户端，**不可信**）。 */
   resumePlan?: Plan | null;
   /** 续跑前要应用的编辑命令（只在 run 终态生效）。 */
@@ -243,6 +246,7 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
           questionId: question.id,
           prompt: question.prompt,
           options: question.options,
+          fields: question.fields,
           traceId,
         },
       });
@@ -259,7 +263,9 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
     startedAt: now().toISOString(),
     deadlineAt: new Date(startedMs + DEFAULT_GATE_CONFIG.maxDurationMs).toISOString(),
     budgetRemainingCNY: DEFAULT_GATE_CONFIG.maxCostCNY,
-    signals: ['text'],
+    // signals 由附件种类派生（不再是写死的常量）。
+    signals: ['text', ...new Set((input.attachments ?? []).map((a) => a.kind))],
+    attachments: input.attachments ?? [],
     meta: { simulate: input.simulate ?? 'none', answers: input.answers ?? {} },
   });
 
@@ -631,6 +637,7 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
           questionId: awaitingQuestion.id,
           prompt: awaitingQuestion.prompt,
           options: awaitingQuestion.options,
+          fields: awaitingQuestion.fields,
           traceId,
         },
       });

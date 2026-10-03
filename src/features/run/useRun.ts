@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useMemo, useRef, useState } from 'react';
-import type { EditCommand, Plan } from '@/shared/plan/types';
+import type { Attachment, EditCommand, Plan } from '@/shared/plan/types';
 import { zStreamEvent, type StreamEvent } from '@/shared/stream/events';
 import type { RunTerminalStatus } from '@/shared/run/types';
 import { useCoalescedNodes } from './useCoalescedNodes';
@@ -26,6 +26,11 @@ export interface StartInput {
   replanMode?: 'diverge' | 'stagnant';
   requireConstraints?: boolean;
   answers?: Record<string, string>;
+  /**
+   * 本轮输入附件描述符。**只透传不解析**：本 hook 不认识附件的任何语义，
+   * 也不读字节（字节已由 `/api/assets` 先落地）。
+   */
+  attachments?: Attachment[];
   /**
    * 续跑：带上一次的 plan 快照。不传 = 从目标重新规划一轮。
    * 与 `edit` 一起构成「先澄清/编辑，再原路重发」的恢复路径。
@@ -168,6 +173,7 @@ export function useRun(): {
             replanMode: input.replanMode ?? 'diverge',
             requireConstraints: input.requireConstraints ?? false,
             answers: input.answers ?? {},
+            attachments: input.attachments ?? [],
             plan: input.plan ?? null,
             edit: input.edit ?? null,
           }),

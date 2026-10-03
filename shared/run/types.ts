@@ -6,7 +6,7 @@
  * 时钟、随机数等副作用由调用方注入。
  */
 import { z } from 'zod';
-import { zEditCommand, zPlan } from '../plan/types';
+import { ATTACHMENT_MAX_COUNT, zAttachment, zEditCommand, zPlan } from '../plan/types';
 
 export const zRunContext = z.object({
   runId: z.string().min(1),
@@ -20,6 +20,13 @@ export const zRunContext = z.object({
   /** 单轮成本闸门余量（PRD §9.3：≤¥2）。 */
   budgetRemainingCNY: z.number().nonnegative().default(2),
   signals: z.array(z.string()).default([]),
+  /**
+   * 本轮输入附件（引用优先）。工具与校验器都要读，因此必须过桥。
+   * ★ 用 `optional()` 而非 `default([])`：后者会让**输出类型**变必填，
+   * 从而破坏既有构造 `RunContext` 字面量的调用点（含 `src/core/**` 内的测试，
+   * 改它会使"破 0 文件数"从 4 变 5）。空值由**引擎**构造 ctx 时补齐为 `[]`。
+   */
+  attachments: z.array(zAttachment).optional(),
   /** 领域无关的自由挂载点；内核不解析其内容（类似 domainExtras）。 */
   meta: z.record(z.string(), z.unknown()).default({}),
 });
@@ -50,8 +57,10 @@ export const zRunRequest = z.object({
   replanMode: z.enum(['diverge', 'stagnant']).default('diverge'),
   /** 强制走目标澄清（用于观察 C0-01 路径）。 */
   requireConstraints: z.boolean().default(false),
-  /** 用户对澄清问题的回答：`questionId -> optionId`。 */
+  /** 用户对澄清问题的回答：`questionId -> optionId`（表单键为 `qid::fid`）。 */
   answers: z.record(z.string(), z.string()).default({}),
+  /** 本轮输入附件描述符（只带引用，字节走 `/api/assets`）。 */
+  attachments: z.array(zAttachment).max(ATTACHMENT_MAX_COUNT).default([]),
   /**
    * 续跑：带上一次的 plan 快照（来自客户端，因此**不可信**，引擎会重新校验并归一状态）。
    * 不传 = 从目标重新规划一轮。

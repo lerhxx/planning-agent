@@ -11,6 +11,40 @@
 import { z } from 'zod';
 
 /* ------------------------------------------------------------------ *
+ * 输入信号与附件（通用输入通道）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 输入信号种类。
+ *
+ * ★ 自 `shared/domain/types.ts` **移入**，唯一动因是切断 ESM 环：
+ * `domain/types` 已 import `run/types`，而 `run/types` 的 `zAttachment` 需要本枚举；
+ * 若 `run/types` 反向 import `domain/types`，会在**模块求值期**炸
+ * （`Cannot access before initialization`）。`plan/types` 是 `shared/**` 里唯一零内部依赖的文件。
+ */
+export const zInputSignalKind = z.enum(['image', 'text', 'geo', 'link', 'file']);
+export type InputSignalKind = z.infer<typeof zInputSignalKind>;
+
+/** 单次 run 的附件数量上限。超限必须**显式报错**，绝不静默裁剪。 */
+export const ATTACHMENT_MAX_COUNT = 20;
+
+/**
+ * 输入附件描述符（**引用优先**：字节不进请求体）。
+ * ★ 6 个字段名全是通用输入概念 —— `kind:'image'` 只是一个取值，放进任何领域都成立。
+ */
+export const zAttachment = z.object({
+  /** 稳定 id：服务端 assetId；上传完成前用本地临时 id。 */
+  id: z.string().min(1),
+  kind: zInputSignalKind,
+  /** 展示名 / `@` 提及名。**允许重名**（系统不替用户改名）。 */
+  name: z.string().min(1),
+  mimeType: z.string().optional(),
+  byteSize: z.number().int().nonnegative().optional(),
+  ref: z.string().optional(),
+});
+export type Attachment = z.infer<typeof zAttachment>;
+
+/* ------------------------------------------------------------------ *
  * 状态机
  * ------------------------------------------------------------------ */
 
@@ -244,10 +278,38 @@ export const zClarifyOption = z.object({
 });
 export type ClarifyOption = z.infer<typeof zClarifyOption>;
 
+/**
+ * 澄清表单的控件类型（UI 通用词汇）。
+ * ★ `image-ref` 不是"图片字段"，而是"从本次输入的附件里挑一个"的 `select`。
+ */
+export const zFieldKind = z.enum(['text', 'number', 'date', 'select', 'multi', 'image-ref']);
+export type FieldKind = z.infer<typeof zFieldKind>;
+
+/**
+ * 澄清表单字段。`fields` 非空 → `ClarifyOptions` 按表单渲染。
+ * ★ 内核只**透传**这些值：不解析、不执行、不据此分支（红线 9）。
+ */
+export const zClarifyField = z.object({
+  id: z.string().min(1),
+  kind: zFieldKind,
+  label: z.string().min(1),
+  description: z.string().optional(),
+  required: z.boolean().default(false),
+  options: z.array(zClarifyOption).default([]),
+  min: z.number().optional(),
+  max: z.number().optional(),
+  maxLength: z.number().int().positive().optional(),
+  pattern: z.string().optional(),
+  default: z.string().optional(),
+});
+export type ClarifyField = z.infer<typeof zClarifyField>;
+
 export const zClarifyQuestion = z.object({
   id: z.string().min(1),
   prompt: z.string().min(1),
+  /** 扁平选项（既有路径）。`fields` 非空时按表单渲染。 */
   options: z.array(zClarifyOption).default([]),
+  fields: z.array(zClarifyField).default([]),
   multi: z.boolean().default(false),
 });
 export type ClarifyQuestion = z.infer<typeof zClarifyQuestion>;
@@ -334,6 +396,18 @@ export function makeIdempotencyKey(runId: string, stepId: string, attempt: numbe
  */
 export function stepSignature(step: Pick<Step, 'type' | 'title'>): string {
   return `${step.type}|${normalizeTitle(step.title)}`;
+}
+
+/** 表单回灌键 `questionId::fieldId`。用 `::` 是因为 `questionId` 本身含 `:`。 */
+export function makeFormKey(questionId: string, fieldId: string): string {
+  return `${questionId}::${fieldId}`;
+}
+
+/** 按**最后一个** `::` 切开，避免 `fieldId` 内含 `:` 时解析错。 */
+export function parseFormKey(key: string): { questionId: string; fieldId: string } | null {
+  const at = key.lastIndexOf('::');
+  if (at <= 0 || at === key.length - 2) return null;
+  return { questionId: key.slice(0, at), fieldId: key.slice(at + 2) };
 }
 
 /** 标题归一：去空白 + 转小写，避免大小写/空格差异被当成实质改动。 */

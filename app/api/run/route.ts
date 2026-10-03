@@ -54,6 +54,8 @@ export async function POST(request: Request): Promise<Response> {
             simulate: input.simulate,
             requireConstraints: input.requireConstraints,
             answers: input.answers,
+            // 附件描述符（引用优先，字节已由 /api/assets 落地）。
+            attachments: input.attachments,
             // 续跑：plan 快照 + 编辑命令（都来自客户端，引擎内部会重新校验）。
             resumePlan: input.plan ?? null,
             edit: input.edit ?? null,

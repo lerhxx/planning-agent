@@ -13,11 +13,13 @@ import { z } from 'zod';
 import {
   zAgentError,
   zClarifyQuestion,
+  zInputSignalKind,
   zSourceRef,
   zStep,
   zStepDraft,
   type AgentError,
   type ClarifyQuestion,
+  type InputSignalKind,
   type Plan,
   type SourceRef,
   type Step,
@@ -35,8 +37,15 @@ export const zDomainId = z
 
 export const zSemver = z.string().regex(/^\d+\.\d+\.\d+$/, '必须是 x.y.z 形式的 semver');
 
-export const zInputSignalKind = z.enum(['image', 'text', 'geo', 'link', 'file']);
-export type InputSignalKind = z.infer<typeof zInputSignalKind>;
+/**
+ * ★ `zInputSignalKind` 已迁至 `shared/plan/types`，此处保留导出以免既有 import 断。
+ * 迁走的**唯一动因**是切断 ESM 环：本文件已 import `run/types`，
+ * 而 `run/types` 的 `zAttachment` 需要该枚举 —— 反向 import 会在模块求值期炸。
+ * ★ 必须写成「先 import 再 export」而不是 `export { x } from '...'`：
+ * 纯 re-export 不留局部绑定，而本文件内部（`zDomainMeta`）仍在用它。
+ */
+export { zInputSignalKind };
+export type { InputSignalKind };
 
 /* ------------------------------------------------------------------ *
  * ① meta

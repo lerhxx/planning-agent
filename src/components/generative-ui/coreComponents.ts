@@ -47,9 +47,11 @@ export function registerCoreUIComponents(): void {
     },
     {
       name: 'ClarifyOptions',
-      description: '二级降级：让用户点选',
+      description: '二级降级：让用户点选或填表',
       schema: zClarifyOptionsProps,
-      requiredProps: ['options'],
+      // ★ `prompt` 是选项模式与表单模式**共有**的唯一必填键。
+      // 若沿用 `options`，表单模式（有 fields 无 options）会被判成 props 未补齐 → 永久骨架。
+      requiredProps: ['prompt'],
       modelCallable: true,
       lazy: false,
       load: () => import('./ClarifyOptions'),

@@ -1,5 +1,7 @@
 node_modules/
 .next/
+# 附件落盘目录（app/api/assets 的 FileAssetStore）
+.tmp/
 out/
 build/
 dist/
