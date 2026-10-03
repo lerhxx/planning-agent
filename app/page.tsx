@@ -164,13 +164,17 @@ export default function Page() {
 
   /* ---------------- 附件：拖拽 + 内联上传入口 ---------------- */
 
-  const pickFiles = (list: FileList | null): File[] =>
-    list === null ? [] : Array.from(list).filter((file) => file.type.startsWith('image/'));
+  /**
+   * ★ 刻意**不在这里过滤**：把用户给的每一个文件都交给 `useAttachments`。
+   * 过滤与"告知被忽略了什么"由 hook 统一负责 —— 在这里偷偷 filter 掉非图片，
+   * 用户拖一个 pdf 进来会看到界面毫无变化，那是静默丢失。
+   */
+  const filesOf = (list: FileList | null): File[] => (list === null ? [] : Array.from(list));
 
   const onDrop = (event: DragEvent<HTMLElement>): void => {
     event.preventDefault();
     setDragOver(false);
-    void attachments.add(pickFiles(event.dataTransfer?.files ?? null));
+    void attachments.add(filesOf(event.dataTransfer?.files ?? null));
   };
 
   /* ---------------- `@` 提及联想 ---------------- */
@@ -307,6 +311,11 @@ export default function Page() {
           <p className="text-[11px] text-rose-300">{attachments.error}</p>
         ) : null}
 
+        {/* 非阻塞提示："已忽略 N 个非图片文件…" —— 不阻断，但必须被看见 */}
+        {attachments.notice.length > 0 && attachments.error.length === 0 ? (
+          <p className="text-[11px] text-amber-300/90">{attachments.notice}</p>
+        ) : null}
+
         <div className="relative">
           <textarea
             ref={composerRef}
@@ -349,7 +358,7 @@ export default function Page() {
             multiple
             hidden
             onChange={(event) => {
-              void attachments.add(pickFiles(event.target.files));
+              void attachments.add(filesOf(event.target.files));
               event.target.value = '';
             }}
           />

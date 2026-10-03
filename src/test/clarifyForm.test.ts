@@ -15,7 +15,7 @@
  * - L5 `submit_form` 动作契约
  */
 import { describe, expect, it } from 'vitest';
-import { makeFormKey, zClarifyQuestion } from '@/shared/plan/types';
+import { makeFormKey, parseFormKey, zClarifyQuestion } from '@/shared/plan/types';
 import { zClarifyOptionsProps, zComponentAction } from '@/src/components/generative-ui/ClarifyOptions/schema';
 import { registerCoreUIComponents } from '@/src/components/generative-ui/coreComponents';
 import { resolveComponent } from '@/src/components/generative-ui/registry';
@@ -131,6 +131,59 @@ describe('L4 · 表单模式必须渲染（不是永久骨架）', () => {
     expect(
       isPropsComplete({ questionId: 'q', fields: [FIELD_A] }, definition!.requiredProps),
     ).toBe(false);
+  });
+});
+
+describe('L6 · makeFormKey 性质守卫（"错而不空"的碰撞形态当前不可达，但必须锁住）', () => {
+  /**
+   * 当前代码里真实出现的 id 词表。
+   * ★ **新增 id 时请把它加进这张表** —— 这就是"将来会红"的机制：
+   * 一旦某个 id 带上贴分隔符的冒号（首/尾 `:` 或内含 `::`），下面前三条会立刻红。
+   */
+  const QUESTION_IDS = [
+    'clarify:travel.image-understand', // travel 工具澄清（图片未识别）
+    'clarify:travel.trip-brief', // travel 工具澄清（信息不足）
+    'clarify:validation', // 内核校验转人工
+    'clarify:constraint.generic', // 内核目标澄清
+    'clarify:tool:s-1', // MockRuntime 脚本
+  ];
+  const FIELD_IDS = [
+    'days',
+    'budget',
+    'unresolved_action', // K5 跳过语义载体
+    'asset:6f1d3f10-1111-4111-8111-111111111111', // `asset:<assetId>`
+  ];
+
+  it('★ 词表守卫：现有 id 都不含贴分隔符的冒号（含了就会键碰撞）', () => {
+    const risky = [...QUESTION_IDS, ...FIELD_IDS].filter(
+      (id) => id.startsWith(':') || id.endsWith(':') || id.includes('::'),
+    );
+    expect(risky).toEqual([]);
+  });
+
+  it('★ 往返性质：词表内任意 (questionId, fieldId) 组合都原样回来', () => {
+    for (const questionId of QUESTION_IDS) {
+      for (const fieldId of FIELD_IDS) {
+        expect(parseFormKey(makeFormKey(questionId, fieldId))).toEqual({ questionId, fieldId });
+      }
+    }
+  });
+
+  it('★ 注入性：词表内任意组合的键互不碰撞（碰撞 = 后写的静默覆盖先写的）', () => {
+    const keys = QUESTION_IDS.flatMap((questionId) =>
+      FIELD_IDS.map((fieldId) => makeFormKey(questionId, fieldId)),
+    );
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  it('已知不可达的碰撞形态：记在这里，配合上面三条构成告警器', () => {
+    // 根因：`lastIndexOf('::')` 在形如 `q:::a` 的串上有两个候选位置，选中的是偏右那个，
+    // 于是「id 里贴着分隔符的冒号」会被含混地算到另一边 —— 错而不空（不是 null）。
+    expect(makeFormKey('q:', 'a')).toBe(makeFormKey('q', ':a'));
+    expect(parseFormKey(makeFormKey('q', ':a'))).toEqual({ questionId: 'q:', fieldId: 'a' });
+
+    // 当前词表里没有这种 id（第一条守着），所以**不可达**；
+    // 谁引进了带贴边冒号的 id，上面"往返性质/注入性"两条会先红。
   });
 });
 

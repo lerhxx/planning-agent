@@ -27,6 +27,11 @@ import { runGoal, type EngineResult } from '@/src/core/run/engine';
 import { getDomainPack, registerDomainPack } from '@/src/core/registry/domainRegistry';
 import { createMockRuntime } from '@/src/core/runtime/mock';
 import { registerAllDomains } from '@/src/domains';
+import {
+  describeIgnoredFiles,
+  partitionFiles,
+  precheckFiles,
+} from '@/src/features/attachment/uploadAssets';
 
 const [BASE_DOMAIN_ID] = registerAllDomains();
 const PROBE_DOMAIN_ID = 'probe-channel';
@@ -99,6 +104,48 @@ describe('zAttachment（通用输入槽位）', () => {
   });
 });
 
+/**
+ * ★ 非图片不得被**静默**丢弃（本项目第六次撞到同一类病）。
+ * 原则：要么显式报错，要么显式说明，不能什么都不说。
+ */
+describe('非图片文件的处置：必须说出来，不能悄悄没了', () => {
+  it('partitionFiles：图片进 accepted，其余进 ignored（一个都不凭空消失）', () => {
+    const png = new File([new Uint8Array([1])], 'a.png', { type: 'image/png' });
+    const pdf = new File([new Uint8Array([1])], 'b.pdf', { type: 'application/pdf' });
+    const { accepted, ignored } = partitionFiles([png, pdf]);
+
+    expect(accepted.map((file) => file.name)).toEqual(['a.png']);
+    expect(ignored.map((file) => file.name)).toEqual(['b.pdf']);
+    expect(accepted.length + ignored.length).toBe(2); // ★ 对照组：没有第三个去处
+  });
+
+  it('describeIgnoredFiles：点名被忽略了什么、有多少个', () => {
+    const pdf = new File([new Uint8Array([1])], 'b.pdf', { type: 'application/pdf' });
+    const txt = new File([new Uint8Array([1])], 'c.txt', { type: 'text/plain' });
+
+    expect(describeIgnoredFiles([])).toBe(''); // 没忽略就别说话
+    const text = describeIgnoredFiles([pdf, txt]);
+    expect(text).toContain('2 个');
+    expect(text).toContain('b.pdf');
+    expect(text).toContain('c.txt');
+  });
+
+  it('忽略 4 个以上时也要给出总数（不能只列前三个让人以为只有三个）', () => {
+    const many = Array.from(
+      { length: 5 },
+      (_, index) => new File([new Uint8Array([1])], `f-${index}.bin`, { type: 'application/x-bin' }),
+    );
+    const text = describeIgnoredFiles(many);
+    expect(text).toContain('5 个');
+  });
+
+  it('★ 口径对齐：空 / 未知 type 在客户端预检阶段就被拒（与服务端 415 同口径）', () => {
+    const emptyType = new File([new Uint8Array([1])], 'mystery.bin', { type: '' });
+    expect(precheckFiles([emptyType]).length).toBeGreaterThan(0);
+    // 服务端的 `file.type.length > 0` 死分支已删：空 type 一律按"不在白名单"处理。
+  });
+});
+
 describe('请求体 / 上下文的 attachments 槽位', () => {
   it('zRunRequest 接受附件，且 20 张是硬上限', () => {
     const list = Array.from({ length: ATTACHMENT_MAX_COUNT }, (_, index) => attachment(index));
@@ -131,6 +178,12 @@ describe('引擎过桥（src/core 只动 engine.ts 一个文件）', () => {
     expect(captured!.signals).toContain('image');
     // 种类去重：两张都是 image，不该出现两个 image。
     expect(captured!.signals.filter((signal) => signal === 'image')).toHaveLength(1);
+  });
+
+  it('★ kind=text 的附件：signals 是**集合**，不得出现两个 text', async () => {
+    await runWithAttachments([{ id: 't1', kind: 'text', name: 'note.txt' }]);
+    expect(captured).not.toBeNull();
+    expect(captured!.signals).toEqual(['text']);
   });
 
   it('无附件时 signals 退回只有 text（既有行为不回归）', async () => {

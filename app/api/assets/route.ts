@@ -57,7 +57,10 @@ export async function POST(request: Request): Promise<Response> {
         413,
       );
     }
-    if (file.type.length > 0 && !ASSET_MIME_ALLOWLIST.includes(file.type)) {
+    // ★ 不再判 `file.type.length > 0`：真实 multipart 会把空 type 补成
+    // `application/octet-stream`，那个分支**永不命中**（死分支），留着只会让
+    // 客户端与服务端口径分叉。空 / 未知 / 名单外一律显式 415。
+    if (!ASSET_MIME_ALLOWLIST.includes(file.type)) {
       return json(
         {
           error: 'MIME_REJECTED',
@@ -75,7 +78,7 @@ export async function POST(request: Request): Promise<Response> {
     const record = await defaultAssetStore.put({
       bytes,
       name: file.name,
-      mime: file.type.length > 0 ? file.type : 'application/octet-stream',
+      mime: file.type, // 走到这里必在白名单内，不可能为空
     });
     assets.push({
       id: record.assetId,

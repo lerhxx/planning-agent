@@ -264,7 +264,9 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
     deadlineAt: new Date(startedMs + DEFAULT_GATE_CONFIG.maxDurationMs).toISOString(),
     budgetRemainingCNY: DEFAULT_GATE_CONFIG.maxCostCNY,
     // signals 由附件种类派生（不再是写死的常量）。
-    signals: ['text', ...new Set((input.attachments ?? []).map((a) => a.kind))],
+    // ★ 集合语义：`'text'` 本身也是合法 kind，必须与派生结果**一起**去重，
+    // 否则带一张 kind='text' 的附件会产出 ['text','text']。
+    signals: [...new Set(['text', ...(input.attachments ?? []).map((a) => a.kind)])],
     attachments: input.attachments ?? [],
     meta: { simulate: input.simulate ?? 'none', answers: input.answers ?? {} },
   });

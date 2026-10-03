@@ -3,17 +3,19 @@
 /**
  * 附件草稿态（客户端）。
  *
- * 四条约定：
+ * 五条约定：
  * - **重名共存**：系统不改用户数据，同名文件各占一条（K2）；
  * - **数量上限**：超过 `ATTACHMENT_MAX_COUNT` 显式报错，不静默裁剪；
  * - **只透传**：本 hook 不解析附件的任何语义，只维护 id / name / 状态；
- * - 上传完成前用本地临时 id，完成后替换成服务端 assetId（K1）。
+ * - 上传完成前用本地临时 id，完成后替换成服务端 assetId（K1）；
+ * - ★ **不静默丢东西**：非图片文件被"忽略"时必须**说出来**（`notice`），
+ *   一个都没剩下时升级成 `error`。静默丢弃是本项目反复撞到的同一类病。
  *
  * 位于 `src/features/**`（L-B）：不得出现任何领域词。
  */
 import { useCallback, useMemo, useState } from 'react';
 import { ATTACHMENT_MAX_COUNT, type Attachment } from '@/shared/plan/types';
-import { makeTempAttachmentId, uploadAssets } from './uploadAssets';
+import { makeTempAttachmentId, describeIgnoredFiles, partitionFiles, uploadAssets } from './uploadAssets';
 
 export type AttachmentDraftStatus = 'uploading' | 'ready' | 'error';
 
@@ -27,7 +29,10 @@ export interface UseAttachments {
   items: AttachmentDraft[];
   /** 已就绪、可直接随 `/api/run` 透传的描述符。 */
   attachments: Attachment[];
+  /** 硬失败（上传失败 / 超限）：必须被看见。 */
   error: string;
+  /** 非阻塞提示（例如"已忽略 N 个非图片文件"）：不阻断，但**必须被看见**。 */
+  notice: string;
   uploading: boolean;
   add: (files: readonly File[]) => Promise<void>;
   remove: (id: string) => void;
@@ -37,16 +42,30 @@ export interface UseAttachments {
 export function useAttachments(): UseAttachments {
   const [items, setItems] = useState<AttachmentDraft[]>([]);
   const [error, setError] = useState<string>('');
+  const [notice, setNotice] = useState<string>('');
 
   const add = useCallback(async (files: readonly File[]): Promise<void> => {
     if (files.length === 0) return;
     setError('');
+    setNotice('');
 
-    const drafts: AttachmentDraft[] = files.map((file) => ({
+    // ★ 先分区，再决定：被忽略的那批**必须**被说出来，不能悄悄没了。
+    const { accepted, ignored } = partitionFiles(files);
+    const ignoredText = describeIgnoredFiles(ignored);
+    if (ignoredText.length > 0) setNotice(ignoredText);
+
+    // 一个图片都没剩下：没有任何后续动作发生，所以升级成 error ——
+    // 否则用户拖了个 pdf 进来，界面毫无变化。
+    if (accepted.length === 0) {
+      if (ignoredText.length > 0) setError(ignoredText);
+      return;
+    }
+
+    const drafts: AttachmentDraft[] = accepted.map((file) => ({
       id: makeTempAttachmentId(),
       kind: 'image',
       name: file.name,
-      mimeType: file.type.length > 0 ? file.type : undefined,
+      mimeType: file.type || undefined,
       byteSize: file.size,
       status: 'uploading',
     }));
@@ -61,7 +80,7 @@ export function useAttachments(): UseAttachments {
     }
     setItems(merged);
 
-    const { assets, error: uploadError } = await uploadAssets(files);
+    const { assets, error: uploadError } = await uploadAssets(accepted);
     if (uploadError.length > 0) {
       // 失败的三条留在列表里并标红，让用户自己删 —— 不静默替他决定。
       const failedIds = new Set(drafts.map((draft) => draft.id));
@@ -90,11 +109,13 @@ export function useAttachments(): UseAttachments {
   const remove = useCallback((id: string): void => {
     setItems((previous) => previous.filter((item) => item.id !== id));
     setError('');
+    setNotice('');
   }, []);
 
   const clear = useCallback((): void => {
     setItems([]);
     setError('');
+    setNotice('');
   }, []);
 
   const attachments = useMemo<Attachment[]>(
@@ -114,5 +135,5 @@ export function useAttachments(): UseAttachments {
 
   const uploading = items.some((item) => item.status === 'uploading');
 
-  return { items, attachments, error, uploading, add, remove, clear };
+  return { items, attachments, error, notice, uploading, add, remove, clear };
 }

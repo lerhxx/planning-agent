@@ -85,6 +85,39 @@ describe('FileAssetStore', () => {
     expect(await target.get(record.assetId)).not.toBeNull();
   });
 
+  it('★ lazy sweep 节流：窗口内的 put 不重复全目录扫描，TTL 语义不变', async () => {
+    let clock = 9_000_000;
+    const throttled = createFileAssetStore(path.join(tmpRoot, 'throttled'), {
+      ttlMs: 1000,
+      now: () => clock,
+    });
+
+    const older = await throttled.put({ bytes: new Uint8Array([1]), name: 'old.png', mime: 'image/png' });
+    clock += 1001; // older 已过期
+    await throttled.put({ bytes: new Uint8Array([2]), name: 'new.png', mime: 'image/png' }); // 节流 → 不扫
+
+    // ★ 节流只是**推迟清理**：older 没有被这次 put 顺手清掉（否则下面会是 0）。
+    expect(await throttled.sweepExpired()).toBe(1);
+    // 但过期判定不受影响：get 仍按 expiresAt 判。
+    expect(await throttled.get(older.assetId)).toBeNull();
+  });
+
+  it('★ 对照组：interval=0 时每次 put 都扫（证明上一条的"没扫"不是因为 sweep 坏了）', async () => {
+    let clock = 10_000_000;
+    const eager = createFileAssetStore(path.join(tmpRoot, 'eager'), {
+      ttlMs: 1000,
+      sweepIntervalMs: 0,
+      now: () => clock,
+    });
+
+    const older = await eager.put({ bytes: new Uint8Array([1]), name: 'old.png', mime: 'image/png' });
+    clock += 1001;
+    await eager.put({ bytes: new Uint8Array([2]), name: 'new.png', mime: 'image/png' }); // 每次都扫
+
+    expect(await eager.sweepExpired()).toBe(0); // older 已被上一次 put 顺手清掉
+    expect(await eager.get(older.assetId)).toBeNull();
+  });
+
   it('路径穿越防护：非 UUID 一律拒', async () => {
     expect(isWellFormedAssetId('../evil')).toBe(false);
     expect(isWellFormedAssetId('1234')).toBe(false);

@@ -76,10 +76,18 @@ export function parseAssetRef(ref: string): string | null {
   return isWellFormedAssetId(assetId) ? assetId : null;
 }
 
+/**
+ * lazy sweep 的最小间隔。
+ * ★ 不是定时任务（设计已定无定时器），只是"上次扫过不久就先不扫"。
+ */
+export const DEFAULT_SWEEP_INTERVAL_MS = 60_000;
+
 export interface FileAssetStoreOptions {
   /** 便于测试 TTL：默认 1h。 */
   ttlMs?: number;
   now?: () => number;
+  /** lazy sweep 节流间隔；传 0 = 每次访问都扫（老行为，仅用于对照/测试）。 */
+  sweepIntervalMs?: number;
 }
 
 /** 落盘实现：`<dir>/<assetId>.bin`（字节）+ `<dir>/<assetId>.json`（描述符）。 */
@@ -89,7 +97,10 @@ export function createFileAssetStore(
 ): AssetStore {
   const root = path.resolve(process.cwd(), dir);
   const ttlMs = options.ttlMs ?? ASSET_TTL_MS;
+  const sweepIntervalMs = options.sweepIntervalMs ?? DEFAULT_SWEEP_INTERVAL_MS;
   const now = options.now ?? (() => Date.now());
+  /** 上次清扫的时刻。初始为 −∞，保证第一次访问一定会扫一次。 */
+  let lastSweepAt = Number.NEGATIVE_INFINITY;
 
   const metaPath = (assetId: string): string => path.join(root, `${assetId}.json`);
   const blobPath = (assetId: string): string => path.join(root, `${assetId}.bin`);
@@ -124,7 +135,19 @@ export function createFileAssetStore(
     }
   };
 
-  const sweep = async (at: number): Promise<number> => {
+  /**
+   * 清掉过期条目，返回清理条数。
+   *
+   * ★ `force=false` 时**惰性节流**：距上次清扫不足 `sweepIntervalMs` 就跳过。
+   * 原因：单次 sweep 是 O(目录条目数) 的全目录扫描，而一批 20 张上传会调 20 次 `put`
+   * —— 不节流就是 20 次全目录扫描，实测目录 100+ 条目时这一批从 5s 涨到 60s+。
+   * ★ 显式调用 `sweepExpired()` 恒为 `force=true`（用户要你扫，就不能因为节流而空转）。
+   * TTL 语义不受影响：节流只推迟清理，不推迟过期判定（`get` 仍按 `expiresAt` 判）。
+   */
+  const sweep = async (at: number, force: boolean): Promise<number> => {
+    if (!force && at - lastSweepAt < sweepIntervalMs) return 0;
+    lastSweepAt = at;
+
     await ensureDir();
     let entries: string[];
     try {
@@ -148,7 +171,7 @@ export function createFileAssetStore(
   return {
     async put(input) {
       await ensureDir();
-      await sweep(now()); // lazy sweep：写入时顺带清过期条目
+      await sweep(now(), false); // lazy sweep（节流）：写入时顺带清过期条目
       const assetId = randomUUID();
       const record: AssetRecord = {
         assetId,
@@ -177,7 +200,7 @@ export function createFileAssetStore(
       }
     },
     async sweepExpired(at) {
-      return sweep(at ?? now());
+      return sweep(at ?? now(), true); // 显式调用：不受节流影响
     },
   };
 }
