@@ -68,7 +68,9 @@ export default function Page() {
       domainId,
       simulate,
       replanMode,
-      requireConstraints,
+      // K9：`requireConstraints` 与图片流程互斥（引擎会在澄清处提前 return，
+      // 计划根本不生成）。有附件时强制关掉，避免"勾了就永远看不到图片流程"。
+      requireConstraints: attachments.attachments.length > 0 ? false : requireConstraints,
       answers,
       attachments: attachments.attachments,
       ...overrides,
