@@ -10,9 +10,11 @@
  */
 import { describe, expect, it } from 'vitest';
 import type { StreamEvent } from '@/shared/stream/events';
-import type { Attachment } from '@/shared/plan/types';
+import type { Attachment, Step } from '@/shared/plan/types';
 import type { RuntimeAdapter } from '@/src/core/runtime/adapter';
 import { runGoal, type EngineInput, type EngineResult } from '@/src/core/run/engine';
+import { applyEdit } from '@/src/core/planning/edit';
+import { parseGoal } from '@/src/core/goal/parse';
 import { createMockRuntime, createDefaultMockScript } from '@/src/core/runtime/mock';
 import { registerAllDomains } from '@/src/domains';
 import { TRAVEL_DOMAIN_ID } from '@/src/domains/travel/meta';
@@ -478,6 +480,116 @@ describe('travel.tripBrief 工具（S7：目标没写天数 → 表单问一次�
     expect(outcome.ok).toBe(true);
     const data = outcome.data as { days: number };
     expect(data.days).toBe(3);
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * ★ K5 回归锁（P1）：retryStep 之后，用户的"跳过"选择仍然读得到
+ * ------------------------------------------------------------------ */
+
+describe('★ K5 · retryStep 后 skippedAssetIds 仍然可读', () => {
+  const UNRECOGNIZED = [attachment('u-1', 'IMG_9001.jpg'), attachment('u-2', 'IMG_9002.jpg')];
+  const skipAnswers = {
+    [makeFormKey(IMAGE_QUESTION_PREFIX, UNRESOLVED_ACTION_FIELD)]: JSON.stringify([SKIP_OPTION_ID]),
+  };
+
+  it('前提：澄清那一轮的 result.data 里 skippedAssetIds 是空的（没有缓存过"跳过"）', async () => {
+    const { result } = await run('帮我规划上海三日游，预算 3000 元', { attachments: UNRECOGNIZED });
+    const imageStep = result.plan!.steps.find((step) => step.type === IMAGE_UNDERSTAND_STEP_TYPE)!;
+    const data = imageStep.result?.data as { skippedAssetIds?: string[] } | undefined;
+    expect(data?.skippedAssetIds ?? []).toEqual([]);
+  });
+
+  it('机制：retryStep 会把该步骤的 result 清空（所以"跳过"只能从 ctx.meta.answers 读回）', () => {
+    const parsedGoal = parseGoal({
+      runId: 'run-k5',
+      raw: '帮我规划上海三日游，预算 3000 元',
+      now: new Date('2026-01-01T00:00:00.000Z'),
+    });
+    const before = makePlan([
+      makeStep({
+        id: 's-img',
+        type: IMAGE_UNDERSTAND_STEP_TYPE,
+        status: 'done',
+        result: {
+          ok: false,
+          data: { skippedAssetIds: ['u-1'] },
+          sourceRefs: [],
+          isEstimate: true,
+          durationMs: 0,
+        },
+      }),
+    ]);
+    const edited = applyEdit(
+      before,
+      parsedGoal.goal,
+      { kind: 'retryStep', stepId: 's-img' },
+      { runId: 'run-k5' },
+    );
+    // `expect(edited.ok)` 不做类型收窄，这里显式收窄一次，顺便把"编辑失败"变成硬失败。
+    if (!edited.ok) throw new Error(`applyEdit 失败：${edited.reason}`);
+    expect(edited.plan.steps.find((step: Step) => step.id === 's-img')?.result).toBeUndefined();
+    expect(edited.plan.steps.find((step: Step) => step.id === 's-img')?.status).toBe('pending');
+  });
+
+  it('★ 走完 retryStep：skippedAssetIds 从 answers 里读回，且下游编排也看得到', async () => {
+    const { result: first } = await run('帮我规划上海三日游，预算 3000 元', {
+      attachments: UNRECOGNIZED,
+    });
+    const plan = first.plan!;
+    const imageStep = plan.steps.find((step) => step.type === IMAGE_UNDERSTAND_STEP_TYPE)!;
+
+    const { result: second } = await run('帮我规划上海三日游，预算 3000 元', {
+      attachments: UNRECOGNIZED,
+      resumePlan: plan,
+      edit: { kind: 'retryStep', stepId: imageStep.id },
+      answers: skipAnswers,
+    });
+
+    expect(second.status).toBe('completed');
+    const retried = second.plan!.steps.find((step) => step.type === IMAGE_UNDERSTAND_STEP_TYPE)!;
+    // ① 重跑后这一步的 result 是新算出来的（不是被 retryStep 清掉后留空）。
+    const data = retried.result?.data as { skippedAssetIds?: string[] } | undefined;
+    expect(data?.skippedAssetIds).toEqual(['u-1', 'u-2']);
+
+    // ② 下游编排同样看得到（覆盖度里"已跳过"这一态靠它）。
+    const compose = second.plan!.steps.find((step) => step.type === 'itinerary_compose')!;
+    const coverage = (compose.result?.data as { coverage?: { skippedAssetIds?: string[] } } | undefined)
+      ?.coverage;
+    expect(coverage?.skippedAssetIds).toEqual(['u-1', 'u-2']);
+  });
+
+  it('反向：retryStep 但**不带 answers** → 选择丢失，重新回到澄清（证明它真的只存在于 answers）', async () => {
+    const { result: first } = await run('帮我规划上海三日游，预算 3000 元', {
+      attachments: UNRECOGNIZED,
+    });
+    const plan = first.plan!;
+    const imageStep = plan.steps.find((step) => step.type === IMAGE_UNDERSTAND_STEP_TYPE)!;
+
+    const { result: second } = await run('帮我规划上海三日游，预算 3000 元', {
+      attachments: UNRECOGNIZED,
+      resumePlan: plan,
+      edit: { kind: 'retryStep', stepId: imageStep.id },
+    });
+
+    expect(second.status).toBe('awaiting_user');
+    const retried = second.plan!.steps.find((step) => step.type === IMAGE_UNDERSTAND_STEP_TYPE)!;
+    const data = retried.result?.data as { skippedAssetIds?: string[] } | undefined;
+    expect(data?.skippedAssetIds ?? []).toEqual([]);
+  });
+
+  it('读取路径：只给 ctx.meta.answers（没有任何历史 result）也能复现 skippedAssetIds', async () => {
+    const ctx = zRunContext.parse({
+      ...CTX,
+      attachments: UNRECOGNIZED,
+      meta: { simulate: 'none', answers: skipAnswers },
+    });
+    const outcome = await travelTools['travel.imageUnderstand'].execute(
+      { goalSummary: '帮我规划上海三日游' } as never,
+      ctx,
+    );
+    expect(outcome.ok).toBe(true);
+    expect((outcome.data as { skippedAssetIds: string[] }).skippedAssetIds).toEqual(['u-1', 'u-2']);
   });
 });
 
