@@ -264,6 +264,11 @@ if (violations[0].code === 'BUDGET_OVERRUN') { /* ... */ }
 ```ts
 export interface DomainUIContribution {
   components: ComponentDefinition[];
+  /**
+   * ★ 服务端概念：客户端刻意不注册领域 pack（否则 providers/tools 会被拖进
+   * 客户端 bundle），因此前端恒用 CORE_DEGRADE_CHAIN，此处声明的自定义链
+   * 在前端不生效。它仍是必填项，通常写 CORE_DEGRADE_CHAIN。
+   */
   degradeChain: {
     rawPayload: string;   // schema 校验失败 → 展示原始载荷
     clarify: string;      // 置信度不足 → 让用户点选

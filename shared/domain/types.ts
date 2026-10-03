@@ -193,6 +193,14 @@ export interface ComponentDefinition extends ComponentDefinitionMeta {
   load?: () => Promise<{ default: ComponentType<any> }>;
 }
 
+/**
+ * 降级链：三级降级各自渲染哪个兜底组件。
+ *
+ * ★ 这是**服务端概念**。领域可以声明自己的 `degradeChain`，但**前端一律只用
+ * `CORE_DEGRADE_CHAIN`** —— 客户端刻意不注册领域 pack（否则领域 providers/tools
+ * 会被拖进客户端 bundle），所以前端查不到领域自定义链。
+ * 需要领域专属降级时，应由服务端在事件里指定组件名，而不是让前端去查注册表。
+ */
 export const zDegradeChain = z.object({
   /** schema 校验失败 → 展示原始载荷。 */
   rawPayload: z.string().min(1),
@@ -209,6 +217,7 @@ export const zStepRendererMeta = z.object({ component: z.string().min(1) });
 
 export const zUIContributionMeta = z.object({
   components: z.array(zComponentDefinitionMeta).default([]),
+  /** 见 `zDegradeChain` 的注释：**服务端概念**，前端只用 `CORE_DEGRADE_CHAIN`。 */
   degradeChain: zDegradeChain,
   stepRendererNames: z.record(z.string(), zStepRendererMeta).default({}),
 });

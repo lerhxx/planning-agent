@@ -7,8 +7,10 @@ import PlanView from '@/src/components/generative-ui/PlanView';
 import type { PlanViewProps } from '@/src/components/generative-ui/PlanView/schema';
 import type { StepItemProps } from '@/src/components/generative-ui/StepItem/schema';
 import type { ComponentAction } from '@/src/components/generative-ui/ClarifyOptions/schema';
-import { getDegradeChain } from '@/src/core/registry/domainRegistry';
 // 领域包的**客户端唯一引用点**：桶文件，新增领域只改 src/domains/ui.ts。
+// 注意：这里只注册**组件**（registerAllUI），刻意不注册领域 pack ——
+// 否则领域 providers/tools 会被拖进客户端 bundle。代价是前端只能用
+// CORE_DEGRADE_CHAIN（领域自定义降级链是服务端概念）。
 import { defaultDomainId, registerAllUI } from '@/src/domains/ui';
 
 // 前端启动即注册：内核通用兜底组件 + Demo 领域组件的懒加载入口。
@@ -43,7 +45,6 @@ export default function Page() {
   const [editStepId, setEditStepId] = useState<string>('');
   const [editTitle, setEditTitle] = useState<string>('');
 
-  const degrading = useMemo(() => getDegradeChain(defaultDomainId), []);
   const running = state.phase === 'streaming';
   const editable = EDITABLE_PHASES.has(state.phase) && state.plan !== null;
 
@@ -277,7 +278,6 @@ export default function Page() {
                   key={node.nodeId}
                   node={node}
                   domainId={defaultDomainId}
-                  degradeChain={degrading}
                   onAction={onAction}
                 />
               ))}
@@ -292,7 +292,6 @@ export default function Page() {
                 key={node.nodeId}
                 node={node}
                 domainId={defaultDomainId}
-                degradeChain={degrading}
                 onAction={onAction}
               />
             ))}

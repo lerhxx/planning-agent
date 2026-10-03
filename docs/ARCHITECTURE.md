@@ -160,7 +160,7 @@ planning-agent/
 | `meta` | 领域标识、路由匹配、能力开关（vision/geo/providers/timeSequence） |
 | `tools` | 工具集；`producesFacts=true` 的必须返回 `SourceRef` |
 | `providers` | 事实数据源；可选 `createValidator` 做约束校验 |
-| `ui` | 组件集 + 降级链 + `stepRenderers` 映射 |
+| `ui` | 组件集 + 降级链（**服务端概念**，前端恒用 `CORE_DEGRADE_CHAIN`）+ `stepRenderers` 映射 |
 | `prompts` | 提示词片段，**必须含 antiHallucination 插槽** |
 | `planning` | `stepTypes` 白名单 + 模板 + `validateStep` |
 | `evaluation` | 评测钩子 |

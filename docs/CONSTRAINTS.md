@@ -218,7 +218,7 @@ rm -rf src/domains/<x> && npm run build                  # 必须通过
 硬要求：
 1. tools 的每项必须带 zod inputSchema；producesFacts=true 的必须返回 SourceRef
 2. providers 必须实现 ProviderAdapter，返回值带 source；可选实现 createValidator
-3. ui 必须给出 degradeChain 四个兜底组件名与 stepRenderers 映射
+3. ui 必须给出 degradeChain 四个兜底组件名与 stepRenderers 映射（**degradeChain 是服务端概念**，前端恒用 `CORE_DEGRADE_CHAIN`，写 `CORE_DEGRADE_CHAIN` 即可）
 4. prompts 必须包含 antiHallucination 插槽
 5. planning 必须给出 stepTypes 白名单与 validateStep
 6. 不得引用任何 @mastra/*（工具实现交给 RuntimeAdapter）
