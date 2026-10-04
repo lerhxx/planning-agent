@@ -256,9 +256,21 @@ export async function emitResultComponents(
 }
 
 /**
+ * JSON Pointer（RFC 6901）的 token 转义：`~` 与 `/` 是保留字符，
+ * 顺序必须是先 `~`→`~0` 再 `/`→`~1`（反序会把已生成的 `~0` 二次转义）。
+ * 不转义的话，键里的 `/` 会被消费端当成层级分隔符 —— 严格实现报错，
+ * 宽容实现则**自动创建嵌套结构、把 payload 放到错误路径且不报错**。
+ */
+function escapeToken(key: string): string {
+  return key.replace(/~/g, '~0').replace(/\//g, '~1');
+}
+
+/**
  * props → JSON Patch 增量。
  * 数组字段先建父节点 `add /<key> = []`，再逐项 `add /<key>/-`（列表逐条长出）；
  * 标量字段 `add /<key>`。**只发一遍，绝不整包重发**（红线 7）。
+ *
+ * ★ 路径是 JSON Pointer，键一律过 `escapeToken`（RFC 6901 保留字符 `~` / `/`）。
  *
  * ★ **为什么一律用 `add` 而不是 `replace`**：消费方（CopilotKit v2 / AG-UI）按
  * **严格 RFC 6902** 应用补丁，起点是 `component_start` 下发的空对象 `{}`：
@@ -277,8 +289,9 @@ export async function emitResultComponents(
  */
 export function propsToPatches(props: Record<string, unknown>): JsonPatchOperation[] {
   const operations: JsonPatchOperation[] = [];
-  for (const [key, value] of Object.entries(props)) {
+  for (const [rawKey, value] of Object.entries(props)) {
     if (value === undefined) continue;
+    const key = escapeToken(rawKey);
     if (Array.isArray(value)) {
       operations.push({ op: 'add', path: `/${key}`, value: [] });
       for (const item of value) {

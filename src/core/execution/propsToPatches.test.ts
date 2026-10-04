@@ -183,6 +183,40 @@ describe('propsToPatches（严格 RFC 6902 视角）', () => {
     ).toThrow(/does not exist/);
   });
 
+  it('★ JSON Pointer 转义：键含 / 或 ~ 时仍是单层键，且严格 apply 后深等于原 props', () => {
+    const props: Record<string, unknown> = {
+      'a/b': 1,
+      'c~d': 2,
+      'e/f': [{ id: 'x' }],
+    };
+
+    const operations = propsToPatches(props);
+    // 路径按 RFC 6901 转义：`/`→`~1`、`~`→`~0`，且顺序正确（不出现 `~01`）。
+    expect(operations.map((operation) => operation.path)).toEqual([
+      '/a~1b',
+      '/c~0d',
+      '/e~1f',
+      '/e~1f/-',
+    ]);
+
+    const applied = applyAllStrict(operations);
+    expect(applied).toEqual(props);
+    // 关键是"单层"：绝不能被当成层级分隔符塞进嵌套对象里。
+    expect(applied['a/b']).toBe(1);
+    expect(applied['c~d']).toBe(2);
+    expect(applied['e/f']).toEqual([{ id: 'x' }]);
+    expect(applied['a']).toBeUndefined();
+    expect(applied['c']).toBeUndefined();
+    expect(applied['e']).toBeUndefined();
+  });
+
+  it('★ 反向锁：不转义的旧形态在严格 applier 下失败（去掉 escapeToken 就会红）', () => {
+    // 旧实现会产出 `/a/b`，严格实现下父节点 `/a` 不存在 → 抛错。
+    expect(() => applyAllStrict([{ op: 'add', path: '/a/b', value: 1 }])).toThrow(
+      /does not exist/,
+    );
+  });
+
   it('增量而非整包：条数守恒、不整包重发、且每个数组的父节点先于其元素', () => {
     const operations = propsToPatches({ a: 1, b: [1, 2, 3], c: [] });
     // a → 1 条；b → 1 条建父 + 3 条元素；c → 1 条建父
