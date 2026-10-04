@@ -24,6 +24,7 @@ import type {
   ReactActivityMessageRenderer,
 } from '@copilotkit/react-core/v2';
 import { z } from 'zod';
+import { makeFormKey } from '@/shared/plan/types';
 
 import ComponentRenderer from './ComponentRenderer';
 import { registerCoreUIComponents } from './coreComponents';
@@ -116,21 +117,94 @@ function readPendingInterrupts(agent: unknown): PendingInterruptLike[] {
   return Array.isArray(list) ? (list as PendingInterruptLike[]) : [];
 }
 
+/** 目标澄清键的前缀：`applyAnswers` 只认 `clarify:<missingField>`。 */
+const CLARIFY_KEY_PREFIX = 'clarify:';
+
+function isClarifyKey(key: string): boolean {
+  return key.startsWith(CLARIFY_KEY_PREFIX) && key.length > CLARIFY_KEY_PREFIX.length;
+}
+
+/**
+ * 值是否长得像 JSON 数组（多选值的编码形态）。
+ * 解析失败就"不是 JSON 数组" —— 这是**形状探测**，不是吞异常：
+ * 非 JSON 的普通字符串本来就该按标量处理。
+ */
+function looksLikeJsonArray(value: string): boolean {
+  if (!value.startsWith('[')) return false;
+  try {
+    return Array.isArray(JSON.parse(value));
+  } catch {
+    return false;
+  }
+}
+
+/** `planAnswers` 的结果：要么能发，要么给出**为什么不能发**。 */
+export type AnswerPlan =
+  | { ok: true; answers: Record<string, string> }
+  | { ok: false; reason: string };
+
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 组件回灌动作 → 中断的 `answers` 载荷。 */
-function toAnswers(action: ComponentAction): Record<string, string> {
+/**
+ * 组件回灌动作 → 中断的 `answers` 载荷。
+ *
+ * ★ 两条澄清路径的**键约定不同**，不能混（混了就是"看起来回答成功、实际没人吃到"）：
+ *
+ * 1. **目标澄清**（扁平选项，`select_option`）
+ *    键 = 引擎下发的 `questionId`，形如 `clarify:<missingField>`；
+ *    消费点是 `src/core/goal/clarify.ts` 的 `applyAnswers`，它**只查**
+ *    `answers['clarify:' + field]`。所以这里**绝不自己拼键** —— 拼错了该 field
+ *    会永远留在 `missingFields` → 追问死循环且不报错。
+ *
+ * 2. **工具澄清**（表单，`submit_form`）
+ *    键 = `makeFormKey(questionId, fieldId)`（`${qid}::${fid}`，K3 约定）；
+ *    消费点是**领域包**（如 `src/domains/travel/tools.ts` 的
+ *    `answers[makeFormKey(questionId, fieldId)]`）。
+ *    目标澄清路径恒为扁平选项（J3 已拍板），所以表单值不该进 `applyAnswers`。
+ *    ★ 多选值按 K3 用 JSON 数组编码、由领域侧 `safeParse` 还原 —— 在这条路上
+ *    它是合法值，不能拦。
+ *
+ * 凡是"消费方必然丢弃"的载荷一律**不许静默发出**：返回 `ok: false` + 原因，
+ * 由调用方渲染成可见提示。
+ */
+export function planAnswers(action: ComponentAction): AnswerPlan {
   if (action.type === 'select_option') {
-    const key = action.questionId ?? 'selection';
-    return { [key]: action.optionId ?? '' };
+    const questionId = action.questionId;
+    if (questionId === undefined || !isClarifyKey(questionId)) {
+      return {
+        ok: false,
+        reason: `questionId 不是 clarify:<字段> 形（拿到「${questionId ?? '空'}」），答案未送出`,
+      };
+    }
+    const optionId = action.optionId;
+    if (optionId === undefined || optionId.length === 0) {
+      return { ok: false, reason: '选项为空，答案未送出' };
+    }
+    if (looksLikeJsonArray(optionId)) {
+      return {
+        ok: false,
+        reason: '多选 JSON 数组进不了目标澄清（内核只认单个 optionId），答案未送出',
+      };
+    }
+    return { ok: true, answers: { [questionId]: optionId } };
   }
+
   if (action.type === 'submit_form') {
-    return { ...(action.values ?? {}) };
+    const questionId = action.questionId;
+    if (questionId === undefined || questionId.length === 0) {
+      return { ok: false, reason: '表单缺 questionId，拼不出 makeFormKey，答案未送出' };
+    }
+    const answers: Record<string, string> = {};
+    for (const [fieldId, value] of Object.entries(action.values ?? {})) {
+      answers[makeFormKey(questionId, fieldId)] = value;
+    }
+    return { ok: true, answers };
   }
-  // `retry` / `cancel` 不是答案，不进 answers。
-  return {};
+
+  // `retry` / `cancel` 不是答案。
+  return { ok: false, reason: '这个动作不携带答案' };
 }
 
 /** 只有这两类动作携带用户答案。 */
@@ -160,12 +234,19 @@ export function useInterruptSubmit(agent: unknown): InterruptSubmit {
 
   const submit = useCallback(
     (action: ComponentAction): void => {
-      // ① 非答案类动作：不提交是本分，不是失败。
+      // ① 非答案类动作（retry/cancel）：不提交是本分，不是失败。
       if (!carriesAnswer(action)) return;
+
+      // ② 载荷本身发不得（键形不对 / 消费方必然丢弃）→ 先说清楚，绝不静默。
+      const plan = planAnswers(action);
+      if (!plan.ok) {
+        setNotice(plan.reason);
+        return;
+      }
 
       const interrupt = readPendingInterrupts(agent)[0];
 
-      // ② 没有可回复的中断 —— 明确告知，绝不静默丢弃用户答案。
+      // ③ 没有可回复的中断 —— 明确告知，绝不静默丢弃用户答案。
       if (interrupt === undefined) {
         setNotice('当前没有待回复的中断，答案未送出。请稍后重试，或直接在对话里回复。');
         return;
@@ -175,9 +256,9 @@ export function useInterruptSubmit(agent: unknown): InterruptSubmit {
         return;
       }
 
-      // ③ resolve 可能同步抛、也可能返回 rejected Promise —— 两条路都要可见。
+      // ④ resolve 可能同步抛、也可能返回 rejected Promise —— 两条路都要可见。
       try {
-        void Promise.resolve(interrupt.resolve({ answers: toAnswers(action) })).catch(
+        void Promise.resolve(interrupt.resolve({ answers: plan.answers })).catch(
           (error: unknown) => {
             setNotice(`提交失败：${describeError(error)}`);
           },

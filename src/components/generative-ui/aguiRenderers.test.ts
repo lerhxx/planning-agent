@@ -18,8 +18,11 @@ import {
   DomainIdProvider,
   PLAN_ACTIVITY_TYPE,
   useDomainId,
+  planAnswers,
   WILDCARD_ACTIVITY_TYPE,
 } from './aguiRenderers';
+import { zGoal, makeFormKey, parseFormKey } from '@/shared/plan/types';
+import { applyAnswers } from '@/src/core/goal/clarify';
 import { resolveComponent, listCoreComponents, registerDomainComponents } from './registry';
 import { registerCoreUIComponents } from './coreComponents';
 import { zPlanViewProps } from './PlanView/schema';
@@ -333,16 +336,16 @@ describe('aguiActivityRenderers', () => {
       createElement(renderer.render, {
         activityType: 'ClarifyOptions',
         content: {
-          questionId: 'q1',
-          prompt: '选一个',
-          options: [{ id: 'opt-a', label: '方案 A' }],
+          questionId: 'clarify:constraint.budget',
+          prompt: '预算上限是多少？',
+          options: [{ id: '500', label: '≤ ¥500' }],
         },
         message: fakeMessage,
         agent: makeAgent([]), // ← 没有 pending interrupt
       }),
     );
 
-    fireEvent.click(await screen.findByText('方案 A'));
+    fireEvent.click(await screen.findByText('≤ ¥500'));
 
     expect(await screen.findByRole('status')).toBeTruthy();
     expect(screen.getByRole('status').textContent ?? '').toContain('当前没有待回复的中断');
@@ -356,21 +359,24 @@ describe('aguiActivityRenderers', () => {
       createElement(renderer.render, {
         activityType: 'ClarifyOptions',
         content: {
-          questionId: 'q1',
-          prompt: '选一个',
-          options: [{ id: 'opt-a', label: '方案 A' }],
+          // 引擎下发的 questionId 形如 `clarify:<missingField>`（见 buildClarifyQuestions）
+          questionId: 'clarify:constraint.budget',
+          prompt: '预算上限是多少？',
+          options: [{ id: '500', label: '≤ ¥500' }],
         },
         message: fakeMessage,
         agent: makeAgent([{ id: 'interrupt-1', resolve }]),
       }),
     );
 
-    fireEvent.click(await screen.findByText('方案 A'));
+    fireEvent.click(await screen.findByText('≤ ¥500'));
 
     await waitFor(() => {
       expect(resolve).toHaveBeenCalledTimes(1);
     });
-    expect(resolve).toHaveBeenCalledWith({ answers: { q1: 'opt-a' } });
+    expect(resolve).toHaveBeenCalledWith({
+      answers: { 'clarify:constraint.budget': '500' },
+    });
   });
 });
 
@@ -416,6 +422,192 @@ describe('DomainIdContext', () => {
       expect(container.querySelector('button')).toBeTruthy();
     });
     expect(container.textContent ?? '').not.toMatch(DEGRADE_MARKER);
+  });
+});
+
+describe('planAnswers · 目标澄清（select_option → applyAnswers）', () => {
+  function goalMissing(...fields: string[]) {
+    return zGoal.parse({
+      id: 'goal-1',
+      runId: 'run-1',
+      createdAt: '2026-01-01T00:00:00.000Z',
+      missingFields: fields,
+    });
+  }
+
+  it('键必须是 clarify:<字段> 形（不是随便一个前缀）', () => {
+    const plan = planAnswers({
+      type: 'select_option',
+      questionId: 'clarify:constraint.budget',
+      optionId: '500',
+    });
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    for (const key of Object.keys(plan.answers)) {
+      expect(key).toMatch(/^clarify:/);
+    }
+  });
+
+  it('★ 端到端：applyAnswers 真的吃到了 —— 字段从 missingFields 消失且约束被写入', () => {
+    const plan = planAnswers({
+      type: 'select_option',
+      questionId: 'clarify:constraint.budget',
+      optionId: '500',
+    });
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+
+    const before = goalMissing('constraint.budget');
+    const after = applyAnswers(before, plan.answers);
+
+    // 只断言"键名带 clarify: 前缀"是假绿 —— 这里证明内核真的消费了。
+    expect(after.missingFields).not.toContain('constraint.budget');
+    expect(after.missingFields).toEqual([]);
+    expect(after.constraints).toEqual([
+      { kind: 'budget', value: '500', raw: 'budget<=500' },
+    ]);
+    expect(after.resources.budgetCNY).toBe(500);
+  });
+
+  it('★ 对照组：键不带 clarify: 前缀时，内核**不会**消费（追问死循环的前兆）', () => {
+    const wrong = { 'constraint.budget': '500' }; // 裸字段名，applyAnswers 查不到
+    const after = applyAnswers(goalMissing('constraint.budget'), wrong);
+    expect(after.missingFields).toContain('constraint.budget');
+    expect(after.constraints).toEqual([]);
+
+    // 所以 planAnswers 必须在这种键形上直接拒绝，而不是照发。
+    const plan = planAnswers({ type: 'select_option', questionId: 'q1', optionId: '500' });
+    expect(plan.ok).toBe(false);
+  });
+
+  it('questionId 缺失 / 不是 clarify: 形 → 拒绝发送（不静默丢一个必然被丢弃的值）', () => {
+    for (const questionId of [undefined, '', 'q1', 'clarify:']) {
+      const plan = planAnswers({ type: 'select_option', questionId, optionId: '500' });
+      expect(plan.ok, `questionId=${String(questionId)} 不该被放行`).toBe(false);
+    }
+  });
+
+  it('多选 JSON 数组值 → 拒绝发送（内核会算成 NaN 然后静默丢弃约束）', () => {
+    const plan = planAnswers({
+      type: 'select_option',
+      questionId: 'clarify:constraint.budget',
+      optionId: JSON.stringify(['100', '500']),
+    });
+    expect(plan.ok).toBe(false);
+  });
+
+  it('skip / none / provide 是合法保留值（不产生约束，但字段会被移除）', () => {
+    const plan = planAnswers({
+      type: 'select_option',
+      questionId: 'clarify:constraint.generic',
+      optionId: 'none',
+    });
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    const after = applyAnswers(goalMissing('constraint.generic'), plan.answers);
+    expect(after.missingFields).toEqual([]);
+    expect(after.constraints).toEqual([]);
+  });
+});
+
+describe('planAnswers · 工具澄清（submit_form → makeFormKey，K3）', () => {
+  const QUESTION_ID = 'clarify:travel.trip-brief';
+
+  it('键必须是 makeFormKey(questionId, fieldId)，领域就是这么读的', () => {
+    const plan = planAnswers({
+      type: 'submit_form',
+      questionId: QUESTION_ID,
+      values: { days: '3', budget: '2000' },
+    });
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+
+    // 领域的读法：`answers[makeFormKey(questionId, fieldId)]`
+    expect(plan.answers[makeFormKey(QUESTION_ID, 'days')]).toBe('3');
+    expect(plan.answers[makeFormKey(QUESTION_ID, 'budget')]).toBe('2000');
+    // 裸 fieldId 不该出现（那是旧的错误形状）
+    expect(Object.keys(plan.answers)).not.toContain('days');
+  });
+
+  it('★ 每个键都能被 parseFormKey 原样拆回（否则领域查不到）', () => {
+    const plan = planAnswers({
+      type: 'submit_form',
+      questionId: QUESTION_ID,
+      values: { days: '3', 'asset:6f1d3f10': 'later' },
+    });
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    for (const [fieldId, key] of [
+      ['days', makeFormKey(QUESTION_ID, 'days')],
+      ['asset:6f1d3f10', makeFormKey(QUESTION_ID, 'asset:6f1d3f10')],
+    ] as const) {
+      expect(parseFormKey(key)).toEqual({ questionId: QUESTION_ID, fieldId });
+    }
+  });
+
+  it('多选值按 K3 用 JSON 数组编码，原样透传（领域侧 safeParse 还原）', () => {
+    const encoded = JSON.stringify(['later']);
+    const plan = planAnswers({
+      type: 'submit_form',
+      questionId: QUESTION_ID,
+      values: { unresolved_action: encoded },
+    });
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(plan.answers[makeFormKey(QUESTION_ID, 'unresolved_action')]).toBe(encoded);
+  });
+
+  it('缺 questionId → 拒绝发送（拼不出 makeFormKey）', () => {
+    const plan = planAnswers({ type: 'submit_form', values: { days: '3' } });
+    expect(plan.ok).toBe(false);
+  });
+
+  it('表单值不会伪装成 clarify:<字段> 去骗 applyAnswers', () => {
+    const plan = planAnswers({
+      type: 'submit_form',
+      questionId: QUESTION_ID,
+      values: { days: '3' },
+    });
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    // J3：表单只在工具澄清路径使用，目标澄清恒为扁平选项。
+    const after = applyAnswers(
+      zGoal.parse({
+        id: 'g',
+        runId: 'r',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        missingFields: ['constraint.budget'],
+      }),
+      plan.answers,
+    );
+    expect(after.missingFields).toContain('constraint.budget');
+  });
+});
+
+describe('答案发不得时：可见提示 + 绝不调用 resolve', () => {
+  it('questionId 不是 clarify: 形 → 有中断也不发，且给出可见提示', async () => {
+    const resolve = vi.fn();
+    const renderer = rendererOf('ClarifyOptions');
+
+    render(
+      createElement(renderer.render, {
+        activityType: 'ClarifyOptions',
+        content: {
+          questionId: 'q1', // ← 不是 clarify:<字段>
+          prompt: '选一个',
+          options: [{ id: 'opt-a', label: '方案 A' }],
+        },
+        message: fakeMessage,
+        agent: makeAgent([{ id: 'interrupt-1', resolve }]),
+      }),
+    );
+
+    fireEvent.click(await screen.findByText('方案 A'));
+
+    expect(await screen.findByRole('status')).toBeTruthy();
+    expect(screen.getByRole('status').textContent ?? '').toContain('答案未送出');
+    // ★ 关键：不能"看起来提交了" —— resolve 一次都没被调用。
+    expect(resolve).not.toHaveBeenCalled();
   });
 });
 
