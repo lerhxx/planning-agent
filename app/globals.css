@@ -1,7 +1,20 @@
 @import 'tailwindcss';
 
-:root {
-  color-scheme: dark;
+/*
+ * 明亮主题 token（页面 / 面板 / 文字 / 边框 / 强调色 / 圆角 / 阴影）。
+ * 由 `app/theme.tokens.css` 统一维护，本文件只负责把它接进 CSS bundle。
+ */
+@import './theme.tokens.css';
+
+/*
+ * 全站明亮色。
+ *
+ * HTML 上的 `color-scheme: light` 必须显式写：CopilotKit v2 的样式包（v2/index.css）
+ * 里**没有**任何 color-scheme 规则，浏览器只会按 UA 默认值走。
+ * 另外只要不给 html/body 加 `.dark` 类，CopilotKit 的默认（明亮）变量就不会被暗色覆盖。
+ */
+html {
+  color-scheme: light;
 }
 
 html,
@@ -10,10 +23,8 @@ body {
 }
 
 body {
-  background:
-    radial-gradient(1200px 600px at 20% -10%, rgba(56, 189, 248, 0.12), transparent 60%),
-    radial-gradient(900px 500px at 100% 0%, rgba(168, 85, 247, 0.12), transparent 55%), #0b1020;
-  color: #e6edf7;
+  background: var(--color-page);
+  color: var(--color-text-strong);
   font-family:
     ui-sans-serif, system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
     'Microsoft YaHei', sans-serif;
@@ -22,5 +33,76 @@ body {
 /* 细滚动条，避免长列表跳动 */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(148, 163, 184, 0.35) transparent;
+  scrollbar-color: rgba(23, 26, 33, 0.18) transparent;
 }
+
+/*
+ * ---------------------------------------------------------------------------
+ * CopilotKit v2 语义变量 → 我们的明亮配色。
+ *
+ * 为什么写在这里能生效（不用 !important）：
+ * CopilotKit 把 `[data-copilotkit]{ --background: …; --foreground: … }` 定义放在
+ * **@layer utilities** 里（dist/v2/index.css）。CSS 级联规则里，非 @layer（unlayered）
+ * 的普通声明优先级**高于**任何 @layer 内的声明，与选择器特异性、先后顺序都无关。
+ * 本文件里的规则都是 unlayered，因此这里稳赢。
+ *
+ * 变量清单对齐自带的默认值 `[data-copilotkit]{…}`（background / foreground / card /
+ * primary / secondary / muted / accent / destructive / input / border / ring / radius /
+ * sidebar-* 等），只替换取值，不增删字段。
+ * ---------------------------------------------------------------------------
+ */
+[data-copilotkit] {
+  --background: var(--color-page);
+  --foreground: var(--color-text-strong);
+
+  --card: var(--color-card);
+  --card-foreground: var(--color-text-strong);
+
+  --popover: var(--color-elevated);
+  --popover-foreground: var(--color-text-strong);
+
+  --primary: var(--color-accent);
+  --primary-foreground: var(--color-text-on-accent);
+
+  --secondary: var(--color-fill-soft);
+  --secondary-foreground: var(--color-text-strong);
+
+  --muted: var(--color-fill-soft);
+  --muted-foreground: var(--color-text-secondary);
+
+  --accent: var(--color-accent-soft);
+  --accent-foreground: var(--color-accent-strong);
+
+  --destructive: var(--color-danger);
+  --destructive-foreground: var(--color-danger);
+
+  --border: var(--color-border);
+  --input: var(--color-border-strong);
+  --ring: var(--color-accent);
+
+  --radius: var(--radius-control);
+
+  --sidebar: var(--color-surface);
+  --sidebar-foreground: var(--color-text-strong);
+  --sidebar-primary: var(--color-accent);
+  --sidebar-primary-foreground: var(--color-text-on-accent);
+  --sidebar-accent: var(--color-accent-soft);
+  --sidebar-accent-foreground: var(--color-accent-strong);
+  --sidebar-border: var(--color-border);
+  --sidebar-ring: var(--color-accent);
+}
+
+/*
+ * 聊天滚动区底色用浅灰面板，`.cpk-*` 之外的留白仍然是纯白，
+ * 对应「页面 #fff / 面板 #f7f8fa」的分层。
+ */
+[data-copilotkit] {
+  background-color: transparent;
+}
+
+/*
+ * 活动卡片（我们下发的 `activityType: "plan"` 计划推演卡）默认排在正文上方：
+ * 服务端保证它先于 assistant 文本消息到达。`CopilotChat` 严格按消息下发顺序渲染，
+ * 所以这里**不能**用 flex `order` / `flex-direction: row-reverse` 之类的手段动它，
+ * 否则会出现「正文在前、思考在后」。
+ */
