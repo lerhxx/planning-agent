@@ -13,19 +13,21 @@ function safeStringify(value: unknown): string {
 /** 兜底组件 1/3：原始载荷。任何无法渲染的内容最终都会落到这里。 */
 export default function RawPayloadCard(props: Partial<RawPayloadCardProps>) {
   return (
-    <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3">
+    <div className="rounded-[var(--radius-card)] border border-amber-200 bg-amber-50 p-3 shadow-[var(--shadow-card)]">
       <div className="mb-1 flex items-center gap-2">
-        <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[11px] text-amber-300">
+        <span className="rounded bg-amber-500/15 px-1.5 py-0.5 text-[11px] text-amber-700">
           原始载荷
         </span>
-        <span className="text-xs text-slate-300">{props.title ?? '渲染降级'}</span>
+        <span className="text-xs text-[var(--color-text-strong)]">
+          {props.title ?? '渲染降级'}
+        </span>
       </div>
-      {props.reason ? <p className="mb-2 text-[11px] text-amber-300/80">{props.reason}</p> : null}
-      <pre className="max-h-64 overflow-auto rounded bg-black/30 p-2 text-[11px] leading-5 text-slate-300">
+      {props.reason ? <p className="mb-2 text-[11px] text-amber-700">{props.reason}</p> : null}
+      <pre className="max-h-64 overflow-auto rounded-[var(--radius-control)] bg-[var(--color-fill-soft)] p-2 text-[11px] leading-5 text-[var(--color-text-secondary)]">
         {safeStringify(props.payload)}
       </pre>
       {props.traceId ? (
-        <p className="mt-1 text-[11px] text-slate-500">traceId {props.traceId}</p>
+        <p className="mt-1 text-[11px] text-[var(--color-text-weak)]">traceId {props.traceId}</p>
       ) : null}
     </div>
   );

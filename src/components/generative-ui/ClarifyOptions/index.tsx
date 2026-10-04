@@ -49,7 +49,7 @@ export default function ClarifyOptions(
   const renderControl = (field: ClarifyField): ReactNode => {
     const value = valueOf(field);
     const base =
-      'w-full rounded-md border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-slate-100 outline-none focus:border-violet-400/50';
+      'w-full rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-card)] px-2 py-1.5 text-xs text-[var(--color-text-strong)] outline-none transition focus:border-[var(--color-accent)]';
 
     switch (field.kind) {
       case 'number':
@@ -76,17 +76,17 @@ export default function ClarifyOptions(
         return (
           <div className="flex flex-wrap gap-2">
             {field.options.length === 0 ? (
-              <span className="text-[11px] text-slate-500">暂无候选项</span>
+              <span className="text-[11px] text-[var(--color-text-weak)]">暂无候选项</span>
             ) : (
               field.options.map((option) => {
                 const selected = Array.isArray(value) && value.includes(option.id);
                 return (
                   <label
                     key={option.id}
-                    className={`flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-xs transition ${
+                    className={`flex cursor-pointer items-center gap-1.5 rounded-[var(--radius-control)] border px-2 py-1 text-xs transition ${
                       selected
-                        ? 'border-violet-400/60 bg-violet-500/20 text-violet-100'
-                        : 'border-white/10 text-slate-300 hover:bg-white/5'
+                        ? 'border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-[var(--color-accent-strong)]'
+                        : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-fill-soft)]'
                     }`}
                   >
                     <input
@@ -143,25 +143,31 @@ export default function ClarifyOptions(
   };
 
   return (
-    <div className="rounded-lg border border-violet-500/30 bg-violet-500/5 p-3">
+    <div className="rounded-[var(--radius-card)] border border-[var(--color-accent-soft-strong)] bg-[var(--color-accent-mist)] p-3 shadow-[var(--shadow-card)]">
       <div className="mb-2 flex items-center gap-2">
-        <span className="rounded bg-violet-500/20 px-1.5 py-0.5 text-[11px] text-violet-300">
+        <span className="rounded bg-[var(--color-accent-soft)] px-1.5 py-0.5 text-[11px] text-[var(--color-accent-strong)]">
           需要你决定
         </span>
       </div>
-      <p className="mb-3 text-sm text-slate-200">{props.prompt ?? '请选择一种继续方式'}</p>
+      <p className="mb-3 text-sm text-[var(--color-text-strong)]">
+        {props.prompt ?? '请选择一种继续方式'}
+      </p>
 
       {fields.length > 0 ? (
         <div className="space-y-3">
           {fields.map((field) => (
             <div key={field.id}>
-              <label className="mb-1 block text-xs text-slate-300">
+              <label className="mb-1 block text-xs text-[var(--color-text-secondary)]">
                 {field.label}
-                {field.required ? <span className="ml-1 text-rose-400">*</span> : null}
+                {field.required ? (
+                  <span className="ml-1 text-[var(--color-danger)]">*</span>
+                ) : null}
               </label>
               {renderControl(field)}
               {field.description ? (
-                <p className="mt-1 text-[11px] text-slate-500">{field.description}</p>
+                <p className="mt-1 text-[11px] text-[var(--color-text-weak)]">
+                  {field.description}
+                </p>
               ) : null}
             </div>
           ))}
@@ -171,12 +177,12 @@ export default function ClarifyOptions(
               type="button"
               disabled={missingRequired.length > 0}
               onClick={submit}
-              className="rounded-md bg-violet-500 px-3 py-1.5 text-xs font-medium text-slate-950 transition hover:bg-violet-400 disabled:opacity-40"
+              className="rounded-[var(--radius-control)] bg-[var(--color-ink)] px-3 py-1.5 text-xs font-medium text-[var(--color-text-on-accent)] transition hover:bg-[var(--color-ink-hover)] disabled:opacity-40"
             >
               提交
             </button>
             {missingRequired.length > 0 ? (
-              <span className="text-[11px] text-slate-500">
+              <span className="text-[11px] text-[var(--color-text-weak)]">
                 还有 {missingRequired.length} 项必填未完成
               </span>
             ) : null}
@@ -185,7 +191,7 @@ export default function ClarifyOptions(
       ) : (
         <div className="flex flex-wrap gap-2">
           {options.length === 0 ? (
-            <span className="text-[11px] text-slate-500">暂无候选项</span>
+            <span className="text-[11px] text-[var(--color-text-weak)]">暂无候选项</span>
           ) : (
             options.map((option) => (
               <button
@@ -198,7 +204,7 @@ export default function ClarifyOptions(
                     optionId: option.id,
                   })
                 }
-                className="rounded-md border border-violet-400/40 bg-violet-500/10 px-3 py-1.5 text-xs text-violet-200 transition hover:bg-violet-500/20"
+                className="rounded-[var(--radius-control)] border border-[var(--color-border)] bg-[var(--color-card)] px-3 py-1.5 text-xs text-[var(--color-text-strong)] transition hover:border-[var(--color-accent)] hover:bg-[var(--color-fill-soft)]"
               >
                 {option.label}
               </button>
@@ -208,7 +214,7 @@ export default function ClarifyOptions(
       )}
 
       {props.traceId ? (
-        <p className="mt-2 text-[11px] text-slate-500">traceId {props.traceId}</p>
+        <p className="mt-2 text-[11px] text-[var(--color-text-weak)]">traceId {props.traceId}</p>
       ) : null}
     </div>
   );
