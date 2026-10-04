@@ -18,12 +18,14 @@
 import { useCallback, useEffect, useState, type DragEvent } from 'react';
 import type { Message } from '@ag-ui/core';
 import { CopilotChat, useAgent, UseAgentUpdate } from '@copilotkit/react-core/v2';
+import type { CopilotChatInput } from '@copilotkit/react-core/v2';
 import type { CopilotChatLabels } from '@copilotkit/react-core/v2';
 import ThreadSidebar from './_components/ThreadSidebar';
 import QuestionHistoryChips from './_components/QuestionHistoryChips';
 import DomainSelector from './_components/DomainSelector';
 import RunOptionsPanel from './_components/RunOptionsPanel';
 import AttachmentBar from './_components/AttachmentBar';
+import TravelChatInput from './_components/TravelChatInput';
 import { useLocalThreads } from './_lib/useLocalThreads';
 import { DEFAULT_AGENT_ID, useShellConfig } from './providers';
 
@@ -187,18 +189,28 @@ export default function Page() {
         </div>
 
         {/*
-         * 附件工具条：加图 / 缩略 / 删除 / 错误与提示。
-         * 放在聊天区**上方**而不是塞进输入框 —— `<CopilotChat>` 自带输入框不接受外部
-         * 注入按钮，为了挂个按钮而 eject 掉它的整套 UI 会把换壳收益赔进去。
+         * 附件状态条（只展示、不再承载上传控件）：缩略 / 计数 / 清空 / 在途等待 /
+         * 发送回执 / 错误 / 提示。上传入口已随 `input={TravelChatInput}` 搬进输入框胶囊，
+         * 这里降级为纯状态展示；没有任何附件与提示时整条 `return null`，不占高度。
          */}
         <AttachmentBar />
 
         <div className="min-h-0 flex-1 px-[var(--spacing-gutter)] pb-[var(--spacing-gutter)] pt-[var(--spacing-gap)]">
           <div className="h-full overflow-hidden rounded-[var(--radius-card)] bg-[var(--color-card)] shadow-[var(--shadow-card)]">
+            {/*
+             * `input={TravelChatInput}` 把上传 / 发送 / 智能解析三件套搬进 SDK 自带输入框，
+             * 而不 eject 掉它的整套 UI（那样换壳收益就没了）。`TravelChatInput` 通过
+             * `<CopilotChatInput>` 的 children 渲染函数完全接管胶囊布局，但文本态仍由
+             * `<CopilotChat>` 内部持有 —— 我们只在「智能解析」时借 `onChange` 把提示语写回。
+             */}
             <CopilotChat
               key={activeThreadId}
               agentId={DEFAULT_AGENT_ID}
               labels={CHAT_LABELS}
+              // 插槽类型要求组件赋值给 `typeof CopilotChatInput`（含其静态成员），
+              // 我们的自定义组件在运行期完全兼容（renderSlot 接受任意组件类型），
+              // 仅类型系统偏严，这里做一次性断言桥接，不改运行时行为。
+              input={TravelChatInput as typeof CopilotChatInput}
               className="h-full"
             />
           </div>

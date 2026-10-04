@@ -1,11 +1,13 @@
 'use client';
 
-import { useRef } from 'react';
 import { useShellConfig } from '@/app/providers';
 import { ATTACHMENT_MAX_COUNT } from '@/shared/plan/types';
 
 /**
- * 附件工具条（聊天区上方，紧凑一行）。
+ * 附件状态条（聊天区上方，紧凑一行）—— 只展示状态，**不再承载上传控件**。
+ *
+ * 上传入口已搬到输入框胶囊里的「上传图片」按钮（见 `TravelChatInput.tsx`），
+ * 这里降级为纯粹的"附件状态条"：缩略 / 计数 / 清空 / 在途等待 / 发送回执 / 错误 / 提示。
  *
  * ★ 两条从旧页面继承下来的纪律，改动前先看懂：
  *
@@ -13,16 +15,17 @@ import { ATTACHMENT_MAX_COUNT } from '@/shared/plan/types';
  *    由它统一决定"哪些走上传、哪些被忽略"，并且**把被忽略的点名说出来**（`notice`）——
  *    在这里偷偷 filter 掉非图片，用户拖一个 pdf 进来会看到界面毫无变化，
  *    那是静默丢失（本项目反复撞到的同一类病）。
- *    （`accept` 只是系统文件选择器的**默认筛选**，不阻止拖拽其它类型 —— 与这条不冲突。）
+ *    （`accept` 只是系统文件选择器的**默认筛选**，不阻止拖拽其它类型 —— 与这条不冲突；
+ *    上传入口和拖拽投放都只负责把文件交给 hook，不替它做决定。）
  *
- * 2. **失败必须可见。** `error` 用危险色、`notice` 用弱化色，两者都直接渲染到页面上。
+ * 2. **失败必须可见。** `error` 用危险色、`notice` 用弱化色、回执 `attachmentNotice`
+ *    用危险色 `role="alert"`，三者在页面上都直接渲染出来。
  *
- * 位置说明：`<CopilotChat>` 自带的输入框不接受外部注入按钮，这里**没有**为了塞按钮
- * 而 eject 掉它的 UI（那样这次换壳的收益就没了），而是把工具条放在聊天区上方。
+ * 3. **无内容即不渲染。** 没有任何附件、没有等待、没有回执/错误/提示时直接 `return null`，
+ *    不占布局高度 —— 干净的输入框不该被一条空状态条顶着。
  */
-export function AttachmentBar() {
+export function AttachmentBar(): React.ReactNode {
   const { attachments, attachmentNotice, awaitingUploads } = useShellConfig();
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // `attachments`（真正随提问发出去的）只含 ready 的，所以"本轮会带上几张"要说这个数，
   // 不能说 items.length —— 后者把还在传的和失败的也算进去了，会误导。
@@ -31,35 +34,23 @@ export function AttachmentBar() {
   // 等待提示要说"正在传几张"（失败的那几张永远等不来，算进去会一直显示错误的数字）。
   const uploadingCount = attachments.items.filter((item) => item.status === 'uploading').length;
 
+  /*
+   * 是否还有任何东西值得展示：有缩略 / 有计数（items 非空）/ 有回执 / 有错误 / 有提示 /
+   * 正在等上传 / 还有没就绪的。全都没有才整条消失。
+   */
+  const hasContent =
+    attachments.items.length > 0 ||
+    attachmentNotice.length > 0 ||
+    attachments.error.length > 0 ||
+    attachments.notice.length > 0 ||
+    awaitingUploads ||
+    notReadyCount > 0;
+
+  if (!hasContent) return null;
+
   return (
     <div className="px-[var(--spacing-gutter)] pt-[var(--spacing-gap)]">
       <div className="flex flex-wrap items-center gap-2">
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          accept="image/png,image/jpeg,image/webp,image/gif"
-          hidden
-          onChange={(event) => {
-            // 全量交给 hook，不在这里 filter；清空 value 以便同一个文件能再次选中。
-            void attachments.add(Array.from(event.target.files ?? []));
-            event.target.value = '';
-          }}
-        />
-        <button
-          type="button"
-          onClick={() => fileInputRef.current?.click()}
-          disabled={attachments.uploading}
-          className="cursor-pointer rounded-[var(--radius-pill)] border px-3 py-1 text-xs transition-colors hover:bg-[var(--color-fill-soft)] disabled:cursor-not-allowed disabled:opacity-50"
-          style={{
-            borderColor: 'var(--color-border)',
-            color: 'var(--color-text-secondary)',
-            background: 'var(--color-card)',
-          }}
-        >
-          {attachments.uploading ? '上传中…' : '+ 加图'}
-        </button>
-
         {/*
          * 计数文案：把三件事说清楚 —— 本轮会带上几张 / 发完不清空 / 有清空入口。
          * 原来的「N / 20」只给了个比值，用户既可能以为发完就清了，
