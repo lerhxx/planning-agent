@@ -1,0 +1,71 @@
+/*
+ * 明亮主题设计 token（travel v2 UI 改造）。
+ *
+ * 接入方式（布局重建时统一切换，本文件不自行生效）：
+ *   在 app/globals.css 的 `@import 'tailwindcss';` 之后追加
+ *   `@import './theme.tokens.css';`
+ * Tailwind v4 会处理整个 CSS bundle，`@theme` 块中的变量会被发射到 `:root`
+ * 并生成对应工具类（--color-* → bg-*/text-*/border-*，--radius-* → rounded-*，
+ * --shadow-* → shadow-*，--spacing-* → p-*/gap-* 等具名值）。
+ *
+ * 观感依据：
+ * - 参考图 IMG_2231（DeepSeek 风格）：纯白/极浅灰背景、浅灰分隔线、单一蓝色强调、克制阴影；
+ * - 参考图 IMG_2232（手机端卡片）：大圆角 + 极轻阴影 + 极简灰阶 + 蓝色选中态 + 黑色主按钮。
+ *
+ * 组件侧引用约定：统一用 `bg-[var(--color-*)]` 这类 var() 任意值写法，
+ * 不依赖 @theme 生成的工具类名 —— 只要本文件被 import，var 即可用。
+ */
+
+:root {
+  color-scheme: light;
+}
+
+@theme {
+  /* ---------- 背景层级 ---------- */
+  --color-page: #ffffff; /* 页面底 */
+  --color-surface: #f7f8fa; /* 页面上的浅灰区块（对话区底色） */
+  --color-card: #ffffff; /* 卡片 */
+  --color-elevated: #ffffff; /* 悬浮层（下拉 / 浮出面板） */
+  --color-fill-soft: #f2f3f7; /* 弱填充：分段器轨道、hover、次要按钮 */
+  --color-fill-strong: #e8eaef; /* 次级填充：按下态 / 更明显的灰底 */
+
+  /* ---------- 文字层级 ---------- */
+  --color-text-strong: #1a1c20; /* 主文字（近黑） */
+  --color-text-secondary: #555b66; /* 次要文字 */
+  --color-text-weak: #9aa1ad; /* 弱化文字：占位、置灰日期、补充说明 */
+  --color-text-on-accent: #ffffff; /* 强调色之上的文字 */
+
+  /* ---------- 边框 / 分隔 ---------- */
+  --color-border: #e7e9ee; /* 常规描边 */
+  --color-border-strong: #d9dce3; /* 强描边（未选中圆圈） */
+  --color-divider: #f0f1f5; /* 组间细分隔线 */
+
+  /* ---------- 强调色（单一蓝色系） ---------- */
+  --color-accent: #4c8bf5; /* 选中实心圆 / 强调 */
+  --color-accent-strong: #3574e0; /* 强调 hover */
+  --color-accent-soft: #e9f1fe; /* 浅蓝：范围胶囊 / 行高亮 */
+  --color-accent-soft-strong: #d7e7fd; /* 浅蓝加深一档：范围的起点圆 */
+  --color-accent-mist: #f4f8ff; /* 最浅蓝：极弱底色 */
+
+  /* ---------- 黑色主按钮（参考图 2 的「确认」） ---------- */
+  --color-ink: #17181c;
+  --color-ink-hover: #2c2e34;
+
+  /* ---------- 语义色 ---------- */
+  --color-danger: #e5484d; /* 必填星号 / 错误 */
+
+  /* ---------- 圆角 ---------- */
+  --radius-card: 22px; /* 生成式卡片（参考图 20–24px 的大圆角） */
+  --radius-control: 12px; /* 行内控件 / 选项行 */
+  --radius-pill: 999px; /* 胶囊（按钮 / 分段器） */
+
+  /* ---------- 阴影（克制） ---------- */
+  --shadow-card: 0 6px 24px rgba(23, 26, 33, 0.06);
+  --shadow-float: 0 12px 40px rgba(23, 26, 33, 0.1);
+  --shadow-segment: 0 1px 3px rgba(23, 26, 33, 0.1); /* 分段器白色浮块 */
+
+  /* ---------- 间距 ---------- */
+  --spacing-gutter: 20px; /* 卡片内边距 */
+  --spacing-gap: 12px; /* 行 / 组间距 */
+  --spacing-row: 48px; /* 选项行高度 */
+}
