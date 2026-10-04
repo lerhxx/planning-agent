@@ -174,6 +174,53 @@ describe('K9 兜底：resolveRequireConstraints', () => {
   });
 });
 
+/**
+ * ★ 传输层的**盲区**（由 v2-ui-shell 提示后显式化）。
+ *
+ * 客户端 `useAttachments` 只把 `status === 'ready'` 的条目放进
+ * `forwardedProps.attachments`，上传中/失败的留在列表里标红由用户自己删。
+ * 也就是说服务端按契约**收不到**非 ready 的条目。
+ *
+ * 但这是**客户端纪律**，不是服务端能力：本端点只认描述符形状，既不查资产库、
+ * 也看不出条目状态。下面三条把"拦不住"写成断言 —— 目的不是证明能拦，
+ * 而是防止哪天有人误以为"服务端会挡住上传失败的附件"，从而悄悄撤掉客户端那道闸。
+ * 真要靠服务端挡，必须**新增**校验（那就会让这些用例失败，逼人把口径写清楚）。
+ */
+describe('传输层的盲区：只认形状，不认状态（别把它当成第二道闸）', () => {
+  it('★ 孤儿 ref 过得去：服务端不查 asset 是否真的存在', () => {
+    const parsed = parseForwardedAttachments({
+      attachments: [{ id: 'a1', kind: 'image', name: 'shot.png', ref: 'asset://根本不存在' }],
+    });
+    expect(parsed.ok).toBe(true);
+    expect(parsed.ok && parsed.attachments?.[0]?.ref).toBe('asset://根本不存在');
+  });
+
+  it('★ ref 可省略：zAttachment 里它就是可选字段，缺了不算错', () => {
+    const parsed = parseForwardedAttachments({
+      attachments: [{ id: 'a1', kind: 'image', name: 'shot.png' }],
+    });
+    expect(parsed.ok).toBe(true);
+    expect(parsed.ok && parsed.attachments?.[0]).toEqual({
+      id: 'a1',
+      kind: 'image',
+      name: 'shot.png',
+    });
+  });
+
+  it('★ 多出来的 `status` 会被 schema 剥掉：服务端**无法**据此区分 ready / uploading', () => {
+    const parsed = parseForwardedAttachments({
+      attachments: [{ id: 'a1', kind: 'image', name: 'shot.png', status: 'uploading' }],
+    });
+    expect(parsed.ok).toBe(true);
+    // 形状照样合法 —— 所以"只发 ready"这条纪律只能由客户端守。
+    expect(parsed.ok && parsed.attachments?.[0]).toEqual({
+      id: 'a1',
+      kind: 'image',
+      name: 'shot.png',
+    });
+  });
+});
+
 describe('端点接线：/api/agui → 内核 ctx', () => {
   it(
     '★ 附件真的进 ctx，signals 由 kind 派生（含去重）',
@@ -183,6 +230,12 @@ describe('端点接线：/api/agui → 内核 ctx', () => {
       expect(result.status).toBe(200);
       expect(captured).not.toBeNull();
       expect((captured!.attachments ?? []).map((item) => item.id)).toEqual(['asset-1', 'asset-2']);
+      // ★ `ref` 也必须原样过去：引用优先的通道里，ref 被吞掉等同于"附件到了但取不到字节"，
+      // 而这种现象在界面上毫无提示 —— 与静默丢附件同族。
+      expect((captured!.attachments ?? []).map((item) => item.ref)).toEqual([
+        'asset://asset-1',
+        'asset://asset-2',
+      ]);
       expect(captured!.signals).toContain('text');
       expect(captured!.signals).toContain('image');
       // 两张都是 image：种类只应出现一次。
