@@ -16,6 +16,7 @@ import type { StreamEvent } from '@/shared/stream/events';
 import { runGoal } from '@/src/core/run/engine';
 import { createMockRuntime } from '@/src/core/runtime/mock';
 import { registerAllDomains } from '@/src/domains';
+import { resolveDomainId } from '@/src/agui/domain';
 import { createTranslator, mergeResumeAnswers } from '@/src/agui/translate';
 
 export const dynamic = 'force-dynamic';
@@ -89,6 +90,22 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
+  registerAllDomains();
+
+  // Explicit domain resolution: absent means "kernel default", but a value that
+  // matches no registered pack is rejected rather than silently swapped.
+  const resolvedDomain = resolveDomainId(parsedOptions.data.domainId);
+  if (!resolvedDomain.ok) {
+    return Response.json(
+      {
+        error: resolvedDomain.reason,
+        domainId: resolvedDomain.domainId,
+        available: resolvedDomain.available,
+      },
+      { status: 400 },
+    );
+  }
+
   let answers: Record<string, string> | undefined;
   if (input.resume !== undefined) {
     try {
@@ -104,9 +121,8 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
-  registerAllDomains();
-
   const options = parsedOptions.data;
+  const domainId = resolvedDomain.domainId;
   const eventEncoder = new EventEncoder();
   const textEncoder = new TextEncoder();
   const translator = createTranslator({ threadId: input.threadId, runId: input.runId });
@@ -163,7 +179,7 @@ export async function POST(request: Request): Promise<Response> {
         await runGoal(
           {
             goal,
-            domainId: options.domainId,
+            domainId,
             simulate: options.simulate,
             requireConstraints: options.requireConstraints,
             ...(answers === undefined ? {} : { answers }),
