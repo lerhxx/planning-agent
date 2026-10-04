@@ -15,20 +15,22 @@ export default function ImageWall(props: Partial<ImageWallProps>) {
   const skippedCount = items.filter((item) => item.skipped).length;
 
   return (
-    <div className="rounded-lg border border-violet-400/25 bg-violet-500/5 p-3">
+    <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-3 shadow-[var(--shadow-card)]">
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <span className="rounded bg-violet-500/20 px-1.5 py-0.5 text-[11px] text-violet-300">
+        <span className="rounded bg-[var(--color-accent-soft)] px-1.5 py-0.5 text-[11px] text-[var(--color-accent-strong)]">
           图片 {items.length} 张
         </span>
-        <span className="text-xs text-slate-200">{props.title ?? '本轮图片'}</span>
+        <span className="text-xs text-[var(--color-text-strong)]">{props.title ?? '本轮图片'}</span>
         {identifiedCount > 0 ? (
-          <span className="text-[11px] text-emerald-300">已识别 {identifiedCount}</span>
+          <span className="text-[11px] text-emerald-700">已识别 {identifiedCount}</span>
         ) : null}
         {unresolvedCount > 0 ? (
-          <span className="text-[11px] text-amber-300">未识别 {unresolvedCount}</span>
+          <span className="text-[11px] text-amber-700">未识别 {unresolvedCount}</span>
         ) : null}
         {skippedCount > 0 ? (
-          <span className="text-[11px] text-slate-400">已跳过 {skippedCount}</span>
+          <span className="text-[11px] text-[var(--color-text-secondary)]">
+            已跳过 {skippedCount}
+          </span>
         ) : null}
       </div>
 
@@ -36,23 +38,29 @@ export default function ImageWall(props: Partial<ImageWallProps>) {
         {items.map((item) => (
           <li
             key={item.assetId || item.name}
-            className="relative rounded bg-black/25 px-1.5 py-1 text-[10px]"
+            className="relative rounded-[var(--radius-control)] bg-[var(--color-surface)] px-1.5 py-1 text-[10px]"
           >
-            <div className="truncate text-slate-200">{item.name || '未命名'}</div>
-            <div className="truncate text-slate-500">{item.identifiedName ?? '未识别'}</div>
+            <div className="truncate text-[var(--color-text-strong)]">
+              {item.name || '未命名'}
+            </div>
+            <div className="truncate text-[var(--color-text-weak)]">
+              {item.identifiedName ?? '未识别'}
+            </div>
             {item.skipped ? (
-              <span className="absolute right-1 top-1 rounded bg-slate-500/30 px-1 text-[9px] text-slate-300">
+              <span className="absolute right-1 top-1 rounded bg-[var(--color-fill-strong)] px-1 text-[9px] text-[var(--color-text-secondary)]">
                 已跳过
               </span>
             ) : null}
           </li>
         ))}
         {items.length === 0 ? (
-          <li className="text-[11px] text-slate-500">还没有图片</li>
+          <li className="text-[11px] text-[var(--color-text-weak)]">还没有图片</li>
         ) : null}
       </ul>
 
-      {props.note ? <p className="mt-1 text-[11px] text-slate-400">{props.note}</p> : null}
+      {props.note ? (
+        <p className="mt-1 text-[11px] text-[var(--color-text-secondary)]">{props.note}</p>
+      ) : null}
     </div>
   );
 }

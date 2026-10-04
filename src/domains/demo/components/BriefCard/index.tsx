@@ -7,18 +7,20 @@ export default function BriefCard(props: Partial<BriefCardProps>) {
   const bullets = props.bullets ?? [];
 
   return (
-    <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3">
+    <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-3 shadow-[var(--shadow-card)]">
       <div className="mb-1 flex items-center gap-2">
-        <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[11px] text-emerald-300">
+        <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[11px] text-emerald-700">
           结论
         </span>
-        <span className="text-xs text-slate-200">{props.title ?? '汇总'}</span>
+        <span className="text-xs text-[var(--color-text-strong)]">{props.title ?? '汇总'}</span>
       </div>
 
-      <p className="text-sm text-slate-100">{props.summary ?? '正在生成结论…'}</p>
+      <p className="text-sm text-[var(--color-text-strong)]">
+        {props.summary ?? '正在生成结论…'}
+      </p>
 
       {bullets.length > 0 ? (
-        <ul className="mt-2 space-y-0.5 text-[11px] text-slate-400">
+        <ul className="mt-2 space-y-0.5 text-[11px] text-[var(--color-text-secondary)]">
           {bullets.map((bullet, index) => (
             <li key={index}>· {bullet}</li>
           ))}
@@ -26,7 +28,7 @@ export default function BriefCard(props: Partial<BriefCardProps>) {
       ) : null}
 
       {props.disclaimer ? (
-        <p className="mt-1 text-[11px] text-amber-300/80">{props.disclaimer}</p>
+        <p className="mt-1 text-[11px] text-amber-700">{props.disclaimer}</p>
       ) : null}
     </div>
   );

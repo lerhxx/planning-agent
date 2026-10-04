@@ -18,7 +18,10 @@ function renderSpans(spans: readonly MdSpan[], keyPrefix: string) {
     const key = `${keyPrefix}-${index}`;
     if (span.code) {
       return (
-        <code key={key} className="rounded bg-black/40 px-1 font-mono text-[10px]">
+        <code
+          key={key}
+          className="rounded bg-[var(--color-fill-soft)] px-1 font-mono text-[10px] text-[var(--color-text-strong)]"
+        >
           {span.text}
         </code>
       );
@@ -32,7 +35,7 @@ function renderSpans(spans: readonly MdSpan[], keyPrefix: string) {
     }
     if (span.bold) {
       return (
-        <strong key={key} className="font-semibold text-slate-200">
+        <strong key={key} className="font-semibold text-[var(--color-text-strong)]">
           {span.text}
         </strong>
       );
@@ -46,13 +49,13 @@ function renderBlock(block: MdBlock, keyPrefix: string) {
   switch (block.kind) {
     case 'heading':
       return (
-        <p key={key} className="text-[11px] font-semibold text-slate-200">
+        <p key={key} className="text-[11px] font-semibold text-[var(--color-text-strong)]">
           {renderSpans(block.spans, key)}
         </p>
       );
     case 'list':
       return (
-        <ul key={key} className="list-inside text-[11px] text-slate-400">
+        <ul key={key} className="list-inside text-[11px] text-[var(--color-text-secondary)]">
           {block.items.map((item, index) => (
             <li key={`${key}-${index}`}>
               {block.ordered ? `${index + 1}. ` : '· '}
@@ -63,14 +66,17 @@ function renderBlock(block: MdBlock, keyPrefix: string) {
       );
     case 'quote':
       return (
-        <p key={key} className="border-l-2 border-white/20 pl-2 text-[10px] text-slate-500">
+        <p
+          key={key}
+          className="border-l-2 border-[var(--color-border-strong)] pl-2 text-[10px] text-[var(--color-text-weak)]"
+        >
           {renderSpans(block.spans, key)}
         </p>
       );
     case 'paragraph':
     default:
       return (
-        <p key={key} className="text-[11px] text-slate-400">
+        <p key={key} className="text-[11px] text-[var(--color-text-secondary)]">
           {renderSpans(block.spans, key)}
         </p>
       );
@@ -85,15 +91,19 @@ export default function ItineraryCard(props: Partial<ItineraryCardProps>) {
   const coverage = props.coverage;
 
   return (
-    <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/5 p-3">
+    <div className="rounded-[var(--radius-card)] border border-[var(--color-border)] bg-[var(--color-card)] p-3 shadow-[var(--shadow-card)]">
       <div className="mb-2 flex flex-wrap items-center gap-2">
-        <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[11px] text-emerald-300">
+        <span className="rounded bg-emerald-500/15 px-1.5 py-0.5 text-[11px] text-emerald-700">
           行程 {days.length} 天
         </span>
-        <span className="text-xs text-slate-200">{props.title ?? '每日行程'}</span>
-        {props.city ? <span className="text-[11px] text-slate-400">· {props.city}</span> : null}
+        <span className="text-xs text-[var(--color-text-strong)]">
+          {props.title ?? '每日行程'}
+        </span>
+        {props.city ? (
+          <span className="text-[11px] text-[var(--color-text-secondary)]">· {props.city}</span>
+        ) : null}
         {props.isEstimate ? (
-          <span className="rounded bg-sky-500/15 px-1.5 py-0.5 text-[11px] text-sky-300">
+          <span className="rounded bg-[var(--color-fill-soft)] px-1.5 py-0.5 text-[11px] text-[var(--color-text-secondary)]">
             样例数据
           </span>
         ) : null}
@@ -102,8 +112,8 @@ export default function ItineraryCard(props: Partial<ItineraryCardProps>) {
           <span
             className={`rounded px-1.5 py-0.5 text-[11px] ${
               coverage.missingAssetIds.length > 0
-                ? 'bg-rose-500/20 text-rose-300'
-                : 'bg-emerald-500/20 text-emerald-300'
+                ? 'bg-rose-500/15 text-rose-700'
+                : 'bg-emerald-500/15 text-emerald-700'
             }`}
           >
             图片覆盖 {coverage.covered}/{coverage.total}
@@ -114,14 +124,19 @@ export default function ItineraryCard(props: Partial<ItineraryCardProps>) {
 
       <ol className="space-y-2">
         {days.map((day) => (
-          <li key={day.day} className="rounded bg-black/20 px-2 py-1.5">
+          <li
+            key={day.day}
+            className="rounded-[var(--radius-control)] bg-[var(--color-surface)] px-2 py-1.5"
+          >
             <div className="flex items-baseline justify-between gap-2">
-              <span className="text-xs text-slate-100">{day.theme || `第 ${day.day} 天`}</span>
-              <span className="shrink-0 font-mono text-[11px] text-emerald-200">
+              <span className="text-xs text-[var(--color-text-strong)]">
+                {day.theme || `第 ${day.day} 天`}
+              </span>
+              <span className="shrink-0 font-mono text-[11px] text-emerald-700">
                 ¥{day.costCNY}
               </span>
             </div>
-            <ul className="mt-1 space-y-0.5 text-[11px] text-slate-400">
+            <ul className="mt-1 space-y-0.5 text-[11px] text-[var(--color-text-secondary)]">
               {day.items.map((item, index) => (
                 <li key={`${item.name}-${index}`}>
                   · {item.slot} ｜ {item.name}（{item.categoryLabel}）¥{item.priceCNY}
@@ -129,8 +144,8 @@ export default function ItineraryCard(props: Partial<ItineraryCardProps>) {
                   <span
                     className={`ml-1 rounded px-1 text-[10px] ${
                       item.origin === 'image'
-                        ? 'bg-emerald-500/20 text-emerald-300'
-                        : 'bg-slate-500/20 text-slate-400'
+                        ? 'bg-emerald-500/15 text-emerald-700'
+                        : 'bg-[var(--color-fill-soft)] text-[var(--color-text-secondary)]'
                     }`}
                   >
                     {item.origin === 'image' ? '来自图片' : '推荐填充'}
@@ -141,7 +156,7 @@ export default function ItineraryCard(props: Partial<ItineraryCardProps>) {
               {day.stayName ? <li>· 住宿：{day.stayName}（¥{day.stayPriceCNY}）</li> : null}
             </ul>
             {day.notes.length > 0 ? (
-              <ul className="mt-1 space-y-0.5 text-[10px] text-slate-500">
+              <ul className="mt-1 space-y-0.5 text-[10px] text-[var(--color-text-weak)]">
                 {day.notes.map((note, index) => (
                   <li key={`${day.day}-note-${index}`}>· {note.text}</li>
                 ))}
@@ -150,40 +165,44 @@ export default function ItineraryCard(props: Partial<ItineraryCardProps>) {
           </li>
         ))}
         {days.length === 0 ? (
-          <li className="text-[11px] text-slate-500">行程还没生成</li>
+          <li className="text-[11px] text-[var(--color-text-weak)]">行程还没生成</li>
         ) : null}
       </ol>
 
-      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-white/10 pt-2 text-[11px]">
-        <span className="text-slate-300">总计 ¥{props.totalCostCNY ?? 0}</span>
+      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-[var(--color-divider)] pt-2 text-[11px]">
+        <span className="text-[var(--color-text-strong)]">总计 ¥{props.totalCostCNY ?? 0}</span>
         {budgetCNY !== null ? (
-          <span className={overBudget ? 'text-rose-300' : 'text-emerald-300'}>
+          <span className={overBudget ? 'text-[var(--color-danger)]' : 'text-emerald-700'}>
             预算 ¥{budgetCNY}
             {overBudget ? ' · 已超预算' : ' · 在预算内'}
           </span>
         ) : (
-          <span className="text-slate-500">未设定预算</span>
+          <span className="text-[var(--color-text-weak)]">未设定预算</span>
         )}
         {coverage && coverage.fillCount > 0 ? (
-          <span className="text-slate-500">填充占比 {Math.round(coverage.fillRatio * 100)}%</span>
+          <span className="text-[var(--color-text-weak)]">
+            填充占比 {Math.round(coverage.fillRatio * 100)}%
+          </span>
         ) : null}
       </div>
 
       {/* markdown 渲染：组件只渲染 blocks，不解析 markdown，也不用 dangerouslySetInnerHTML */}
       {props.summaryBlocks && props.summaryBlocks.length > 0 ? (
-        <div className="mt-2 space-y-1 border-t border-white/10 pt-2">
+        <div className="mt-2 space-y-1 border-t border-[var(--color-divider)] pt-2">
           {props.summaryBlocks.map((block, index) => renderBlock(block, `md-${index}`))}
         </div>
       ) : null}
 
       {sourceRefs.length > 0 ? (
-        <p className="mt-1 text-[11px] text-slate-500">
+        <p className="mt-1 text-[11px] text-[var(--color-text-weak)]">
           数据来源：{sourceRefs.map((ref) => ref.label).join('、')}
         </p>
       ) : null}
-      {props.note ? <p className="mt-1 text-[11px] text-slate-400">{props.note}</p> : null}
+      {props.note ? (
+        <p className="mt-1 text-[11px] text-[var(--color-text-secondary)]">{props.note}</p>
+      ) : null}
       {props.disclaimer ? (
-        <p className="mt-1 text-[11px] text-amber-300/80">{props.disclaimer}</p>
+        <p className="mt-1 text-[11px] text-amber-700">{props.disclaimer}</p>
       ) : null}
     </div>
   );
