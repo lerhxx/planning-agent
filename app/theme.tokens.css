@@ -5,15 +5,22 @@
  *   在 app/globals.css 的 `@import 'tailwindcss';` 之后追加
  *   `@import './theme.tokens.css';`
  * Tailwind v4 会处理整个 CSS bundle，`@theme` 块中的变量会被发射到 `:root`
- * 并生成对应工具类（--color-* → bg-*/text-*/border-*，--radius-* → rounded-*，
- * --shadow-* → shadow-*，--spacing-* → p-*/gap-* 等具名值）。
+ * 并生成对应工具类：--color-* 变量生成 bg- / text- / border- 系列，
+ * --radius-* 生成 rounded- 系列，--shadow-* 生成 shadow- 系列，
+ * --spacing-* 生成 p- / gap- 系列。
  *
  * 观感依据：
  * - 参考图 IMG_2231（DeepSeek 风格）：纯白/极浅灰背景、浅灰分隔线、单一蓝色强调、克制阴影；
  * - 参考图 IMG_2232（手机端卡片）：大圆角 + 极轻阴影 + 极简灰阶 + 蓝色选中态 + 黑色主按钮。
  *
- * 组件侧引用约定：统一用 `bg-[var(--color-*)]` 这类 var() 任意值写法，
+ * 组件侧引用约定：统一用 `bg-[var(--color-card)]` 这类 var() 任意值写法，
  * 不依赖 @theme 生成的工具类名 —— 只要本文件被 import，var 即可用。
+ *
+ * ★★ 改这个文件的硬纪律：注释里绝对不能出现「星号紧跟斜杠」这个 CSS 注释终止
+ * 组合。它会把注释提前闭合，后面的中文注释被当成 CSS 解析，直接让整个
+ * App Router 编译失败（表现是全站 500，看起来像后端挂了，其实是两个字符）。
+ * 写通配符时星号后面一律留空格（如 `--color-* 变量`），不要写成 `--color-*→bg-*`
+ * 这种星号贴着斜杠的连写。
  */
 
 :root {
