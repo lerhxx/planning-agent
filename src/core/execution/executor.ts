@@ -257,20 +257,36 @@ export async function emitResultComponents(
 
 /**
  * props → JSON Patch 增量。
- * 数组字段逐项 `add /<key>/-`（列表逐条长出），标量字段 `replace /<key>`。
- * **只发一遍，绝不整包重发**（红线 7）。
+ * 数组字段先建父节点 `add /<key> = []`，再逐项 `add /<key>/-`（列表逐条长出）；
+ * 标量字段 `add /<key>`。**只发一遍，绝不整包重发**（红线 7）。
+ *
+ * ★ **为什么一律用 `add` 而不是 `replace`**：消费方（CopilotKit v2 / AG-UI）按
+ * **严格 RFC 6902** 应用补丁，起点是 `component_start` 下发的空对象 `{}`：
+ *   - `replace` 要求目标路径**已存在**，打在 `{}` 上必然失败；
+ *   - `add /<key>/-` 要求 `/<key>` **已存在且是数组**，直接打在 `{}` 上同样失败。
+ * `add` 到对象成员在 RFC 6902 里等价于写入，且这条补丁流从空对象开始，
+ * 因此不存在"覆盖已有值"的语义差别。结果：**澄清卡片曾因这两条规则一条
+ * props 都打不上，且不报错 —— 只剩一行 console 警告**（见 AG-UI 端点修复记录）。
+ *
+ * ★ 旧前端 `src/features/run/nodeReducer.ts` 的 `applyPatch` 对对象成员上的
+ * `add` / `replace` 处理完全相同（`record[last] = operation.value`），
+ * 且父节点缺失时会自动创建，因此本次改动对旧路径**零行为差异**。
+ *
+ * ★ 空数组**必须**建父节点：`options: []` / `fields: []` 是合法且需要存在的键，
+ * 否则消费方的 props 完整性判定会认为字段缺失。
  */
 export function propsToPatches(props: Record<string, unknown>): JsonPatchOperation[] {
   const operations: JsonPatchOperation[] = [];
   for (const [key, value] of Object.entries(props)) {
     if (value === undefined) continue;
     if (Array.isArray(value)) {
+      operations.push({ op: 'add', path: `/${key}`, value: [] });
       for (const item of value) {
         operations.push({ op: 'add', path: `/${key}/-`, value: item });
       }
       continue;
     }
-    operations.push({ op: 'replace', path: `/${key}`, value });
+    operations.push({ op: 'add', path: `/${key}`, value });
   }
   return operations;
 }

@@ -259,19 +259,23 @@ export function createTranslator(options: TranslatorOptions): Translator {
             return [];
           }
 
+          // `add` instead of `replace` on every field: a strict RFC 6902 consumer
+          // rejects `replace` at a path that does not exist, and `reason` is not
+          // present until this event carries one — which would drop the whole
+          // patch, status included, without an error.
           const patch: JsonPatch = [
-            { op: 'replace', path: `/steps/${index}/status`, value: kernelEvent.status },
+            { op: 'add', path: `/steps/${index}/status`, value: kernelEvent.status },
           ];
           if (kernelEvent.attempt !== undefined) {
             patch.push({
-              op: 'replace',
+              op: 'add',
               path: `/steps/${index}/attempt`,
               value: kernelEvent.attempt,
             });
           }
           if (kernelEvent.reason !== undefined) {
             patch.push({
-              op: 'replace',
+              op: 'add',
               path: `/steps/${index}/reason`,
               value: kernelEvent.reason,
             });
@@ -332,7 +336,10 @@ export function createTranslator(options: TranslatorOptions): Translator {
               type: EventType.ACTIVITY_DELTA,
               messageId: kernelEvent.nodeId,
               activityType: componentTypes.get(kernelEvent.nodeId) ?? FALLBACK_ACTIVITY_TYPE,
-              patch: [{ op: 'replace', path: '/status', value: kernelEvent.status }],
+              // `add` rather than `replace`: the activity starts from `{}`, and a
+              // strict RFC 6902 consumer rejects `replace` on a missing path —
+              // exactly the silent failure this endpoint must not have.
+              patch: [{ op: 'add', path: '/status', value: kernelEvent.status }],
             },
           ];
         }

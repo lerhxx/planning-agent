@@ -50,10 +50,13 @@ describe('createTranslator', () => {
         type: EventType.ACTIVITY_DELTA,
         messageId: 'plan-plan-1',
         activityType: 'plan',
+        // `add` rather than `replace`: a strict RFC 6902 consumer drops the whole
+        // patch when `replace` targets a path that does not exist — and `reason`
+        // is absent until this event carries one.
         patch: [
-          { op: 'replace', path: '/steps/1/status', value: 'running' },
-          { op: 'replace', path: '/steps/1/attempt', value: 2 },
-          { op: 'replace', path: '/steps/1/reason', value: 'RETRY' },
+          { op: 'add', path: '/steps/1/status', value: 'running' },
+          { op: 'add', path: '/steps/1/attempt', value: 2 },
+          { op: 'add', path: '/steps/1/reason', value: 'RETRY' },
         ],
       },
     ]);
