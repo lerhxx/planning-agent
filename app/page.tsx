@@ -21,6 +21,8 @@ import { CopilotChat, useAgent, UseAgentUpdate } from '@copilotkit/react-core/v2
 import type { CopilotChatLabels } from '@copilotkit/react-core/v2';
 import ThreadSidebar from './_components/ThreadSidebar';
 import QuestionHistoryChips from './_components/QuestionHistoryChips';
+import DomainSelector from './_components/DomainSelector';
+import RunOptionsPanel from './_components/RunOptionsPanel';
 import { useLocalThreads } from './_lib/useLocalThreads';
 import { DEFAULT_AGENT_ID } from './providers';
 
@@ -128,7 +130,21 @@ export default function Page() {
       />
 
       <main className="flex min-w-0 flex-1 flex-col bg-[var(--color-surface)]">
-        <QuestionHistoryChips questions={questions} />
+        {/*
+         * 顶部工具条：左边是本轮的用户问题 chips（hover 出全文），
+         * 右边是领域选择器 + 运行参数（故障注入/重排）。
+         * 运行参数默认折叠，不占主视觉 —— 但**必须可达**：
+         * 中断（HITL）路径只有注入 simulate=clarify 才会触发。
+         */}
+        <div className="flex items-start justify-between gap-3 px-[var(--spacing-gutter)] pt-[var(--spacing-gutter)]">
+          <div className="min-w-0 flex-1">
+            <QuestionHistoryChips questions={questions} />
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <DomainSelector />
+            <RunOptionsPanel />
+          </div>
+        </div>
 
         <div className="min-h-0 flex-1 px-[var(--spacing-gutter)] pb-[var(--spacing-gutter)] pt-[var(--spacing-gap)]">
           <div className="h-full overflow-hidden rounded-[var(--radius-card)] bg-[var(--color-card)] shadow-[var(--shadow-card)]">

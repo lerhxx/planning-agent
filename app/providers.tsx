@@ -6,11 +6,11 @@
  * 设计要点（务必读，改动前先读）：
  *
  * 1. **不走 CopilotKit runtime。**
- *    我们只有一个自营的 AG-UI SSE 端点 `/api/agui`（见 app/api/agui/route.ts），
- *    没有标准的 CopilotKit runtime。所以这里**显式不传 `runtimeUrl`** —— 一旦传了，
- *    react-core 会周期性去探 `/info` 并走 5s 超时/重试循环（控制台刷屏 + 无谓请求）。
- *    同理不传 `useSingleEndpoint`：它只影响上面那个探测的地址形态，
- *    跟我们这条 HttpAgent 链路毫无关系，传了只会误导后来人。
+ *    我们只有一个自营的 AG-UI SSE 端点 `/api/agui`，没有标准的 CopilotKit runtime。
+ *    所以这里**显式不传 `runtimeUrl`** —— 一旦传了，react-core 会周期性去探 `/info`
+ *    并走 5s 超时/重试循环（控制台刷屏 + 无谓请求）。同理不传 `useSingleEndpoint`：
+ *    它只影响上面那个探测的地址形态，跟我们这条 HttpAgent 链路毫无关系，
+ *    传了只会误导后来人。
  *
  * 2. **agent 通过 `selfManagedAgents` 注入。**
  *    `HttpAgent`（@ag-ui/client）直接把请求打到 `/api/agui`，Agent key 为 `default`，
@@ -25,25 +25,39 @@
  *
  * 4. **agent 实例必须稳定持有。**
  *    `HttpAgent` 里挂着订阅者与 run 状态，每次渲染 new 一个会导致正在跑的 run 断流。
- *    这里用 `useMemo(() => ..., [])` 固定为单例。
+ *    这里用 `useMemo(() => …, [])` 固定为单例。
  *
  * 5. **`labels` 不在这层传。**
- *    `CopilotKitProviderProps`（dist/copilotkit-*.d.mts）**没有 `labels` 字段**；
- *    文案走 `<CopilotChat labels={...} />`（键名见 `CopilotChatDefaultLabels`，
- *    例如输入框占位符叫 `chatInputPlaceholder`，不是 `inputPlaceholder`）。
+ *    `CopilotKitProviderProps` **没有 `labels` 字段**；文案走
+ *    `<CopilotChat labels={…} />`（键名见 `CopilotChatDefaultLabels`，例如输入框占位符
+ *    叫 `chatInputPlaceholder`，不是 `inputPlaceholder`）。
  *
  * 6. **`renderActivityMessages`** 是我们的 AG-UI 活动卡片渲染器（计划卡片等），
  *    契约见 `src/components/generative-ui/aguiRenderers` 的导出
  *    `aguiActivityRenderers: ReactActivityMessageRenderer<any>[]`。
+ *
+ * 7. **领域 id 与运行期开关的通道**（见下方 `agent` 构造处）：
+ *    - `domainId` → `RunAgentInput.state`
+ *    - `simulate` / `replanMode` / `requireConstraints` → `RunAgentInput.forwardedProps`
  */
-import { useCallback, useMemo, type ReactNode } from 'react';
-import { HttpAgent } from '@ag-ui/client';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
+import { HttpAgent, type AbstractAgent } from '@ag-ui/client';
+import type { RunAgentInput } from '@ag-ui/core';
 import { CopilotKitProvider } from '@copilotkit/react-core/v2';
 import {
   DomainIdProvider,
   aguiActivityRenderers,
 } from '@/src/components/generative-ui/aguiRenderers';
-import { defaultDomainId, registerAllUI } from '@/src/domains/ui';
+import { domainOptions, registerAllUI } from '@/src/domains/ui';
+import { TRAVEL_DOMAIN_ID } from '@/src/domains/travel/meta';
 
 /**
  * 保留旧页面的启动注册：生成式组件**按名字**在注册表里查找（`ComponentRenderer`），
@@ -56,35 +70,114 @@ registerAllUI();
 /** 自营 AG-UI 端点。改成远端服务时只需要动这一个常量。 */
 const AGUI_ENDPOINT = '/api/agui';
 
-/** `<CopilotChat agentId="...">` 用的 agent key，与下面的注册键保持一致。 */
+/** `<CopilotChat agentId="…">` 用的 agent key，与下面的注册键保持一致。 */
 export const DEFAULT_AGENT_ID = 'default';
+
+/* ------------------------------------------------------------------ *
+ * 运行期开关（故障注入 / 重排行为）
+ * ------------------------------------------------------------------ */
+
+/** `/api/agui` 的 `forwardedProps` 只认这四个键，未知键会被忽略（不会 400）。 */
+export interface RunOptions {
+  /** 故障注入：`none` 正常 / `retryable` 可重试 / `fatal` 不可恢复 / `clarify` 触发澄清中断。 */
+  simulate: 'none' | 'retryable' | 'fatal' | 'clarify';
+  /** 重排行为：`diverge` 换方案 / `stagnant` 原地打转（演示 NO_CONVERGENCE 闸门）。 */
+  replanMode: 'diverge' | 'stagnant';
+  /** 强制先澄清约束再出计划（与"直接执行"互斥演示用）。 */
+  requireConstraints: boolean;
+}
+
+const DEFAULT_RUN_OPTIONS: RunOptions = {
+  simulate: 'none',
+  replanMode: 'diverge',
+  requireConstraints: false,
+};
+
+/**
+ * 领域默认选 travel：这是本项目投入最大的领域，写死 demo 等于永远摸不到。
+ *
+ * ⚠️ 服务端对 `domainId` 是**强校验**的（`/api/agui`）：
+ *   - 不传 / 传 `''`（或纯空白）→ 合法，走内核默认（第一个已注册领域 = demo）；
+ *   - 传了但不在注册表里 → **400** `{ error:'UNKNOWN_DOMAIN', domainId, available }`，
+ *     不再静默回落；
+ *   - 只做 trim，不归一化大小写（`'Travel'` 会被拒）。
+ * 所以取值必须是各领域包 `meta.ts` 里的**小写 id 字面量**。
+ * 选择器选项一律来自 `domainOptions[].id` —— 绝不能传 `.label`（中文展示名，必 400）。
+ */
+const DEFAULT_DOMAIN_ID: string = domainOptions.some((option) => option.id === TRAVEL_DOMAIN_ID)
+  ? TRAVEL_DOMAIN_ID
+  : (domainOptions[0]?.id ?? '');
+
+/* ------------------------------------------------------------------ *
+ * 外壳配置 Context
+ * ------------------------------------------------------------------ */
+
+export interface ShellConfig {
+  /** 当前领域 id。必须是已注册的小写字面量（服务端强校验，未知值直接 400）。 */
+  domainId: string;
+  setDomainId: (domainId: string) => void;
+  runOptions: RunOptions;
+  setRunOptions: (patch: Partial<RunOptions>) => void;
+}
+
+const ShellConfigContext = createContext<ShellConfig | null>(null);
+
+/**
+ * 读取外壳配置（领域 + 运行期开关）。
+ *
+ * 刻意**不**给默认值兜底：忘了包 Provider 是接线错误，静默回落到默认值会让
+ * "我明明选了 travel 却跑了 demo" 这类问题查不到根因 —— 直接抛。
+ */
+export function useShellConfig(): ShellConfig {
+  const config = useContext(ShellConfigContext);
+  if (config === null) {
+    throw new Error('useShellConfig 必须在 <Providers> 内部使用');
+  }
+  return config;
+}
 
 export interface ProvidersProps {
   children: ReactNode;
 }
 
 export default function Providers({ children }: ProvidersProps): ReactNode {
-  // 单例：整个应用生命周期内只创建一次。
+  const [domainId, setDomainId] = useState<string>(DEFAULT_DOMAIN_ID);
+  const [runOptions, setRunOptions] = useState<RunOptions>(DEFAULT_RUN_OPTIONS);
+
+  /**
+   * 中间件每次 run 都要读**最新**的领域与开关值，但 `useMemo(…, [])` 里的
+   * agent 只构造一次 —— 所以用一个 ref 桥接，避免闭包吃到构造时的旧值。
+   */
+  const latestRef = useRef<{ domainId: string; runOptions: RunOptions }>({
+    domainId,
+    runOptions,
+  });
+  latestRef.current = { domainId, runOptions };
+
   const agent = useMemo<HttpAgent>(() => {
     const instance = new HttpAgent({ url: AGUI_ENDPOINT });
+    instance.state = { domainId: DEFAULT_DOMAIN_ID };
+
     /**
-     * 领域 id 的唯一通道：AG-UI 的 `RunAgentInput.state`。
-     * `/api/agui` 从 `input.state`（或 `forwardedProps`）里读 `domainId`，
-     * 活动消息本身不带它，所以这里**同时**做两件事：
-     *   1. 写进 agent.state —— 每次 run 都会带上，服务端据此选领域；
-     *   2. 喂给 `DomainIdProvider` —— 客户端卡片查领域组件时用它。
-     * 两边同源，避免"服务端跑 travel、客户端按 demo 渲染"这种错位。
+     * 每次 run 之前把当前配置打进 `RunAgentInput`。
      *
-     * ⚠️ 服务端对 `domainId` 是**强校验**的（`/api/agui`，commit 4a35faa）：
-     *   - 不传 / 传 `''`（或纯空白）→ 合法，走内核默认（第一个已注册领域 = demo）；
-     *   - 传了但不在注册表里 → **400** `{ error:'UNKNOWN_DOMAIN', domainId, available }`，
-     *     不再静默回落；
-     *   - 只做 trim，不归一化大小写（`'Travel'` 会被拒）。
-     * 所以这里必须是各领域包 `meta.ts` 里的**小写 id 字面量**（当前 `defaultDomainId`
-     * = `demoDomainId` = `'demo'`）。将来若加领域选择器，务必传 `domainOptions[].id`
-     * 而不是 `.label`（label 是中文展示名，传过去必 400）。
+     * 为什么用中间件而不是 `runAgent({ forwardedProps })`：run 是 `<CopilotChat>`
+     * 内部发起的，外壳拿不到调用点；而 AG-UI 的 middleware 就在 `runAgent` 的
+     * 链路里（`[...middlewares, boundary].reduceRight(...).run(input)`），
+     * 是唯一能在不改组件库的前提下改写出参的地方。
+     *
+     * 为什么 `state` 和 `forwardedProps` 都写：`/api/agui` 的 `parseRunOptions` 两个
+     * 都读（state 先，forwardedProps 后覆盖），`domainId` 走 state 是跟服务端约定好的通道，
+     * 开关走 forwardedProps 语义更准（它们不是会话状态，是本次 run 的指令）。
      */
-    instance.state = { domainId: defaultDomainId };
+    instance.use((input: RunAgentInput, next: AbstractAgent) =>
+      next.run({
+        ...input,
+        state: { ...input.state, domainId: latestRef.current.domainId },
+        forwardedProps: { ...input.forwardedProps, ...latestRef.current.runOptions },
+      }),
+    );
+
     return instance;
   }, []);
 
@@ -104,18 +197,31 @@ export default function Providers({ children }: ProvidersProps): ReactNode {
     [],
   );
 
+  const config = useMemo<ShellConfig>(
+    () => ({
+      domainId,
+      setDomainId,
+      runOptions,
+      setRunOptions: (patch: Partial<RunOptions>): void =>
+        setRunOptions((prev) => ({ ...prev, ...patch })),
+    }),
+    [domainId, runOptions],
+  );
+
   return (
     <CopilotKitProvider
       selfManagedAgents={selfManagedAgents}
       renderActivityMessages={aguiActivityRenderers}
       onError={handleError}
     >
-      {/*
-       * 领域上下文：`ComponentRenderer` 查领域定制组件时需要 domainId，
-       * 而 AG-UI 活动消息不携带它，所以由外壳显式提供。缺省值 `''` 也能渲染
-       * （只命中内核通用组件表），包了之后才能拿到领域定制组件。
-       */}
-      <DomainIdProvider domainId={defaultDomainId}>{children}</DomainIdProvider>
+      <ShellConfigContext.Provider value={config}>
+        {/*
+         * 领域上下文：`ComponentRenderer` 查领域定制组件时需要 domainId，
+         * 而 AG-UI 活动消息不携带它，所以由外壳显式提供（缺省 `''` 只命中内核通用表）。
+         * 这里与 `agent.state.domainId` 同源，避免"服务端跑 travel、客户端按 demo 渲染"。
+         */}
+        <DomainIdProvider domainId={domainId}>{children}</DomainIdProvider>
+      </ShellConfigContext.Provider>
     </CopilotKitProvider>
   );
 }
