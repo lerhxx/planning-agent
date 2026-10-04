@@ -18,9 +18,11 @@ import {
   DomainIdProvider,
   PLAN_ACTIVITY_TYPE,
   useDomainId,
+  WILDCARD_ACTIVITY_TYPE,
 } from './aguiRenderers';
-import { resolveComponent, listCoreComponents } from './registry';
+import { resolveComponent, listCoreComponents, registerDomainComponents } from './registry';
 import { registerCoreUIComponents } from './coreComponents';
+import { zPlanViewProps } from './PlanView/schema';
 
 /* ------------------------------------------------------------------ *
  * 夹具
@@ -64,9 +66,10 @@ describe('aguiActivityRenderers', () => {
       expect(rendererOf(name).content).toBe(definition!.schema);
     }
 
-    // 反向：渲染器也不能凭空多出注册表里没有的类型（`plan` 是唯一的例外）。
+    // 反向：渲染器也不能凭空多出注册表里没有的类型
+    //（`plan` 是专用渲染器，`*` 是兜底渲染器，两者本来就不在注册表里）。
     for (const name of names) {
-      if (name === PLAN_ACTIVITY_TYPE) continue;
+      if (name === PLAN_ACTIVITY_TYPE || name === WILDCARD_ACTIVITY_TYPE) continue;
       expect(listCoreComponents()).toContain(name);
     }
     expect(new Set(names).size).toBe(names.length);
@@ -94,6 +97,97 @@ describe('aguiActivityRenderers', () => {
       steps: [{ id: 's1', title: '订机票', status: 'running' }],
     });
     expect(withSteps.success).toBe(true);
+
+    // ★ 更强的断言：`ComponentRenderer` 真正拿去校验的 `zPlanViewProps`
+    // 也必须接住这两份形状 —— 这才是"服务端 shape 与内核 schema 兼容"的实质。
+    // 传输层 schema 是刻意放宽的（否则 CopilotKit 会先校验失败并整卡不渲染），
+    // 所以只测它是不够的。
+    expect(zPlanViewProps.safeParse({
+      planId: 'plan-1',
+      revision: 2,
+      status: 'running',
+      summary: '三天两夜成都',
+      steps: [],
+    }).success).toBe(true);
+    expect(zPlanViewProps.safeParse({
+      planId: 'plan-1',
+      revision: 2,
+      status: 'running',
+      summary: '三天两夜成都',
+      steps: [{ id: 's1', title: '订机票', status: 'running' }],
+    }).success).toBe(true);
+  });
+
+  it('plan 的传输层 schema 必须放行不合法载荷，否则降级链根本跑不到', () => {
+    // CopilotKit 在 render 之前先 `~standard.validate(content)`，
+    // 失败就 return null（整卡不渲染）。所以传输层**不能**在这里把关，
+    // 校验必须留给 ComponentRenderer —— 它失败会渲染「原始载荷」而不是白屏。
+    const malformed = {
+      planId: 'plan-1',
+      revision: 1,
+      status: 'draft',
+      summary: '坏载荷',
+      steps: 'not-an-array',
+    };
+    expect(schemaOf(PLAN_ACTIVITY_TYPE).safeParse(malformed).success).toBe(true);
+    expect(zPlanViewProps.safeParse(malformed).success).toBe(false);
+  });
+
+  it('通配符渲染器存在，且未知活动类型落到降级态而不是空白', async () => {
+    const renderer = rendererOf(WILDCARD_ACTIVITY_TYPE);
+    expect(renderer.activityType).toBe('*');
+    // 兜底必须放行任何载荷，否则又变成"校验失败 → 整卡不渲染"。
+    expect(schemaOf(WILDCARD_ACTIVITY_TYPE).safeParse({ anything: [1, 2, 3] }).success).toBe(true);
+
+    const { container } = render(
+      createElement(renderer.render, {
+        activityType: 'TotallyUnknownCard',
+        content: { foo: 'bar' },
+        message: fakeMessage,
+        agent: makeAgent(),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(container.textContent ?? '').toMatch(DEGRADE_MARKER);
+    });
+  });
+
+  it('领域组件即使不在渲染器快照里，也能经兜底渲染器渲染出来', async () => {
+    registerDomainComponents('domain-test', [
+      {
+        name: 'DomainOnlyCard',
+        description: '领域专属卡片',
+        schema: zPlanViewProps,
+        requiredProps: [],
+        modelCallable: false,
+        lazy: false,
+        load: async () => ({
+          default: () => createElement('div', null, '我是领域卡片'),
+        }),
+      },
+    ]);
+
+    const renderer = rendererOf(WILDCARD_ACTIVITY_TYPE);
+
+    const { container } = render(
+      createElement(
+        DomainIdProvider,
+        {
+          domainId: 'domain-test',
+          children: createElement(renderer.render, {
+            activityType: 'DomainOnlyCard',
+            content: {},
+            message: fakeMessage,
+            agent: makeAgent(),
+          }),
+        },
+      ),
+    );
+
+    await waitFor(() => {
+      expect(container.textContent ?? '').toContain('我是领域卡片');
+    });
   });
 
   it('不合法的 content 落到降级态，绝不白屏、绝不抛异常', async () => {

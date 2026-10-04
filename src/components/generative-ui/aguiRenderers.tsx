@@ -23,6 +23,7 @@ import type {
   ActivityMessage,
   ReactActivityMessageRenderer,
 } from '@copilotkit/react-core/v2';
+import { z } from 'zod';
 
 import ComponentRenderer from './ComponentRenderer';
 import { registerCoreUIComponents } from './coreComponents';
@@ -225,15 +226,22 @@ function readMessageId(message: unknown): string | null {
  * ⑤ `plan` 活动：思考模块 / 计划推演卡
  * ------------------------------------------------------------------ */
 
-/**
- * 服务端「计划推演」活动类型。
- *
- * 注册表里没有叫 `plan` 的组件（组件表里叫 `PlanView`），
- * 而 `zPlanViewProps` **正好能接住**服务端那份
- * `{ planId, revision, status, summary, steps }`（status / revision / steps 都有默认值，
- * planId / summary 可选），所以 content schema 直接复用它，不另造一份。
- */
 export const PLAN_ACTIVITY_TYPE = 'plan';
+
+/**
+ * `plan` 活动的**传输层** schema：刻意放宽到 `unknown`。
+ *
+ * ★ 为什么不用 `zPlanViewProps`（它其实**能**接住服务端那份 `{planId, revision,
+ * status, summary, steps}` —— status/revision/steps 都有默认值，planId/summary 可选）：
+ * CopilotKit 在调用 `render` **之前**会先拿 `content` 做一次 `~standard.validate()`，
+ * 失败就直接 `console.warn` + `return null` —— 也就是**整张卡片不渲染**，
+ * 我们的三级降级链根本没机会跑（`useRenderActivityMessage` 的实现，已核实）。
+ * 那正是本项目最忌讳的"白屏"。
+ *
+ * 所以这里只做"放行"，**真正的校验留在 `ComponentRenderer` 里**（它用 `zPlanViewProps`）：
+ * 合法 → 渲染 PlanView；不合法 → 落到原始载荷/错误态/骨架，用户看得见。
+ */
+export const zPlanActivityContent = z.unknown();
 
 export interface PlanActivityCardProps {
   /** 活动消息的 content（未经信任，下面会 safeParse）。 */
@@ -312,7 +320,7 @@ function createPlanActivityRenderer(): AnyActivityMessageRenderer {
   }
   return {
     activityType: PLAN_ACTIVITY_TYPE,
-    content: zPlanViewProps,
+    content: zPlanActivityContent,
     render: PlanActivityView,
   };
 }
@@ -366,6 +374,61 @@ function createRegistryRenderer(
 }
 
 /**
+ * 通配活动类型。CopilotKit 的匹配顺序是
+ * `精确 activityType（优先 agentId 命中的）→ "*" 兜底`，
+ * 所以 `"*"` **不会抢走**任何有专属渲染器的类型（已核实 `useRenderActivityMessage`）。
+ */
+export const WILDCARD_ACTIVITY_TYPE = '*';
+
+/** 兜底渲染器的 content 同样放宽：见 `zPlanActivityContent` 的注释。 */
+export const zFallbackActivityContent = z.unknown();
+
+/**
+ * 兜底渲染器：任何**没有专属渲染器**的活动类型都落到这里。
+ *
+ * 解决两个真实的白屏口子：
+ * 1. 领域组件（运行时才 `registerDomainComponents`，不在模块加载时的快照里）
+ *    → `ComponentRenderer` 是**运行时查表**，照样能渲染出来；
+ * 2. 完全不认识的活动类型 → `ComponentRenderer` 查不到 → 一级降级「原始载荷」，
+ *    用户至少看得到数据，而不是一块空白。
+ */
+function createFallbackActivityRenderer(): AnyActivityMessageRenderer {
+  function FallbackActivityView(props: ActivityRenderProps): ReactNode {
+    const domainId = useDomainId();
+    const { submit, notice } = useInterruptSubmit(props.agent);
+
+    return (
+      <ActivityCardFrame eyebrow={`活动 · ${props.activityType}`}>
+        <ComponentRenderer
+          node={{
+            nodeId: readMessageId(props.message) ?? props.activityType,
+            component: props.activityType,
+            props: props.content ?? {},
+            status: 'ready',
+          }}
+          domainId={domainId}
+          onAction={submit}
+        />
+        {notice ? (
+          <p
+            role="status"
+            className="mt-2 rounded-[var(--radius-control)] bg-[var(--color-fill-soft)] px-3 py-2 text-[12px] text-[var(--color-text-secondary)]"
+          >
+            {notice}
+          </p>
+        ) : null}
+      </ActivityCardFrame>
+    );
+  }
+
+  return {
+    activityType: WILDCARD_ACTIVITY_TYPE,
+    content: zFallbackActivityContent,
+    render: FallbackActivityView,
+  };
+}
+
+/**
  * 按**当前**注册表生成渲染器数组。
  *
  * 领域组件若在模块加载之后才注册，外壳应重新调用本函数（注册表是运行时可变的）。
@@ -383,6 +446,9 @@ export function buildAguiActivityRenderers(): AnyActivityMessageRenderer[] {
     }
     renderers.push(createRegistryRenderer(definition));
   }
+
+  // 兜底放最后：精确匹配永远优先，它只在"没人认领"时上场。
+  renderers.push(createFallbackActivityRenderer());
 
   return renderers;
 }
