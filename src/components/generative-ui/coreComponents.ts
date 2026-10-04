@@ -1,7 +1,7 @@
 /**
  * 内核通用组件的注册入口（前端启动时执行一次）。
  *
- * 五个通用组件 + 三级降级链，全部**领域无关** —— 删除任何 `src/domains/*` 后它们仍在。
+ * 八个通用组件 + 三级降级链，全部**领域无关** —— 删除任何 `src/domains/*` 后它们仍在。
  */
 import { registerCoreComponents } from './registry';
 import { zPlanViewProps } from './PlanView/schema';
@@ -10,6 +10,8 @@ import { zRawPayloadCardProps } from './RawPayloadCard/schema';
 import { zClarifyOptionsProps } from './ClarifyOptions/schema';
 import { zErrorStateProps } from './ErrorState/schema';
 import { zSkeletonListProps } from './SkeletonList/schema';
+import { zCalendarFieldProps } from './fields/CalendarField/schema';
+import { zChoiceGroupFieldProps } from './fields/ChoiceGroupField/schema';
 
 let registered = false;
 
@@ -73,6 +75,27 @@ export function registerCoreUIComponents(): void {
       modelCallable: false,
       lazy: false,
       load: () => import('./SkeletonList'),
+    },
+    {
+      name: 'CalendarField',
+      description: '日期选择卡：精确日期 / 日期区间 / 灵活的天数',
+      schema: zCalendarFieldProps,
+      // 整张 schema 的每个键都有 `.default()` 或 `.optional()`，
+      // 因此**没有必填键** —— 空 props 也能立即渲染（不会卡在骨架）。
+      requiredProps: [],
+      modelCallable: true,
+      lazy: true,
+      load: () => import('./fields/CalendarField'),
+    },
+    {
+      name: 'ChoiceGroupField',
+      description: '分组选择卡：单选 / 多选，一次提交',
+      schema: zChoiceGroupFieldProps,
+      // 同上：`groups` 带 `.default([])`，空 props 也是合法输入。
+      requiredProps: [],
+      modelCallable: true,
+      lazy: true,
+      load: () => import('./fields/ChoiceGroupField'),
     },
   ]);
 }
