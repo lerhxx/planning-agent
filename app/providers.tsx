@@ -58,6 +58,7 @@ import {
 } from '@/src/components/generative-ui/aguiRenderers';
 import { domainOptions, registerAllUI } from '@/src/domains/ui';
 import { TRAVEL_DOMAIN_ID } from '@/src/domains/travel/meta';
+import { buildResumeWithCancelled } from '@/src/agui/resume';
 
 /**
  * 保留旧页面的启动注册：生成式组件**按名字**在注册表里查找（`ComponentRenderer`），
@@ -177,6 +178,44 @@ export default function Providers({ children }: ProvidersProps): ReactNode {
         forwardedProps: { ...input.forwardedProps, ...latestRef.current.runOptions },
       }),
     );
+
+    /*
+     * ★ 补齐未交代的 pending interrupt —— 一个真实的阻断性 bug 的修法。
+     *
+     * 现象：用户在澄清卡片上**不点选项、直接在输入框发新消息** →
+     *   Error: Thread has 1 pending interrupt(s) not addressed by resume: clarify:…
+     *   （`@ag-ui/client` 的 `AbstractAgent.onInitialize` 抛，请求发出去之前就死了）
+     *
+     * 为什么包在 `runAgent` 上、而不是顺手在上面的中间件里补 `resume`：
+     * 校验发生在 `runAgent` 内部，且**早于**中间件 ——
+     *     const input = this.prepareRunAgentInput(parameters);
+     *     await this.onInitialize(input, …);              ← 校验在这里抛
+     *     …middlewares.reduceRight(…).run(input)           ← 中间件在这里才跑
+     * 校验看的是中间件之前的 input，中间件补 resume 根本来不及。
+     * 唯一能在不动组件库的前提下提前注入的位置就是 `runAgent` 的**参数**：
+     * CopilotKit 的发消息链路正是 `copilotkit.runAgent({ agent })` → core 内部
+     * `agent.runAgent(agentRunInput, …)` → 落到这里。
+     *
+     * 为什么补 `cancelled` 而不是"什么都不管"：
+     *   1. 用户直接发新消息 = 放弃上一个问题改问新的，新消息天然覆盖旧问题；
+     *   2. SDK 自己另一条错误分支的文案就是「… can no longer be answered. **Cancel**
+     *      it to continue the thread.」—— `cancelled` 是它认可的"放弃并继续"出口；
+     *   3. 服务端 `mergeResumeAnswers` 只消费 `status === 'resolved'`，`cancelled`
+     *      不产生 answers，正好等价于"这次不带答案，重新跑"。
+     * ★ 已经交代过的中断绝不能再补一条 cancelled（见 `buildResumeWithCancelled` 注释）：
+     *   那样会把用户刚点的选项冲掉。
+     */
+    const baseRunAgent = instance.runAgent.bind(instance);
+    instance.runAgent = (parameters, subscriber) => {
+      const resume = buildResumeWithCancelled(
+        instance.pendingInterrupts ?? [],
+        parameters?.resume,
+      );
+      return baseRunAgent(
+        resume === undefined ? parameters : { ...parameters, resume: [...resume] },
+        subscriber,
+      );
+    };
 
     return instance;
   }, []);
