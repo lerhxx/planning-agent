@@ -74,6 +74,15 @@ export default function Providers({ children }: ProvidersProps): ReactNode {
      *   1. 写进 agent.state —— 每次 run 都会带上，服务端据此选领域；
      *   2. 喂给 `DomainIdProvider` —— 客户端卡片查领域组件时用它。
      * 两边同源，避免"服务端跑 travel、客户端按 demo 渲染"这种错位。
+     *
+     * ⚠️ 服务端对 `domainId` 是**强校验**的（`/api/agui`，commit 4a35faa）：
+     *   - 不传 / 传 `''`（或纯空白）→ 合法，走内核默认（第一个已注册领域 = demo）；
+     *   - 传了但不在注册表里 → **400** `{ error:'UNKNOWN_DOMAIN', domainId, available }`，
+     *     不再静默回落；
+     *   - 只做 trim，不归一化大小写（`'Travel'` 会被拒）。
+     * 所以这里必须是各领域包 `meta.ts` 里的**小写 id 字面量**（当前 `defaultDomainId`
+     * = `demoDomainId` = `'demo'`）。将来若加领域选择器，务必传 `domainOptions[].id`
+     * 而不是 `.label`（label 是中文展示名，传过去必 400）。
      */
     instance.state = { domainId: defaultDomainId };
     return instance;
