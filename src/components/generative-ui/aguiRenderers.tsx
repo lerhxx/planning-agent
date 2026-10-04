@@ -18,10 +18,12 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import type {
-  AbstractAgent,
-  ActivityMessage,
-  ReactActivityMessageRenderer,
+import {
+  useCopilotKit,
+  type AbstractAgent,
+  type ActivityMessage,
+  type ReactActivityMessageRenderer,
+  type ResumeEntry,
 } from '@copilotkit/react-core/v2';
 import { z } from 'zod';
 import { makeFormKey } from '@/shared/plan/types';
@@ -104,11 +106,23 @@ export function ActivityCardFrame(props: ActivityCardFrameProps): ReactNode {
  *
  * 只声明这里真正会读的字段，不去猜 CopilotKit 的完整类型 ——
  * 网络/宿主对象一律按"不可信"处理，逐个字段做运行时检查。
+ *
+ * ★★ 这里**没有** `resolve()` —— 它从来就不存在（踩过的坑，别再加回来）：
+ * `AbstractAgent.pendingInterrupts` 是 `Interrupt[]`，由 RUN_FINISHED 分支
+ * `pendingInterrupts = outcome === 'interrupt' ? interrupts.map(...) : []`
+ * **原样搬运服务端下发的数据对象**，只有 `{ id, reason, responseSchema, ... }`，
+ * 一个方法都没有。所以早先 `typeof interrupt.resolve !== 'function'` 恒真，
+ * 每次点选项都会弹出"中断对象未提供 resolve()" —— 卡片能渲染、选项永远点不动。
+ *
+ * ★ 正确的应答通路是 **发起一次带 `resume` 的新 run**：
+ * `copilotkit.runAgent({ agent, resume: [{ interruptId, status: 'resolved', payload }] })`。
+ * （`useInterrupt()` 的 `resolve` 内部走的也是这一条，但它只把 interrupt 载荷
+ * 交给 render 回调；我们的题干和选项是走 **ACTIVITY 流**下发的，interrupt 载荷里
+ * 只有 `responseSchema`，所以只能在现有渲染路径里直接调 `runAgent`。）
  */
 interface PendingInterruptLike {
   id?: string;
   name?: string;
-  resolve?: (value: unknown) => void | Promise<void>;
 }
 
 function readPendingInterrupts(agent: unknown): PendingInterruptLike[] {
@@ -222,15 +236,28 @@ export interface InterruptSubmit {
 /**
  * 把澄清卡的提交接到 AG-UI interrupt 上。
  *
+ * 应答方式：**不是**调用 interrupt 上的某个方法（它只是数据，没有方法），
+ * 而是发起一次新 run 并在 `resume` 里交代这个中断的答案：
+ * `copilotkit.runAgent({ agent, resume: [{ interruptId, status: 'resolved', payload: { answers } }] })`。
+ * 外壳（`app/providers.tsx`）已包过 `instance.runAgent`，会把本次 `resume` 没交代的
+ * 其余 pending 中断自动补成 `cancelled`，所以这里只填目标那一条是安全的。
+ *
  * ★ 红线（"静默失败"是本项目反复出现的 bug 模式）：
- * 用户点了一次提交，答案**必须**有显式结果 —— 要么送进 interrupt，要么在界面上说清楚为什么没送出去。
- * 因此下面三个分支每一个都留下可见痕迹（`notice`）或在注释里写明为什么可以不管：
- * 1. 非答案类动作（retry/cancel）→ 本来就不该提交，直接返回；
- * 2. 没有 pending interrupt → 渲染"当前无法提交"提示，绝不静默丢弃；
- * 3. `resolve` 抛错 → 把错误文案渲染出来。
+ * 用户点了一次提交，答案**必须**有显式结果 —— 要么发起了一次带 resume 的 run，
+ * 要么在界面上说清楚为什么没发出去。因此下面每个分支都留下可见痕迹（`notice`）
+ * 或在注释里写明为什么可以不管：
+ * ① 非答案类动作（retry/cancel）→ 本来就不该提交，直接返回；
+ * ② 载荷本身发不得（键形不对 / 消费方必然丢弃）→ 先说清楚；
+ * ③ 没有 pending interrupt / 中断缺 `id` → 说清楚（拼不出 resume 条目）；
+ * ④ `runAgent` 同步抛或返回 rejected Promise → 把错误文案显示出来。
+ *
+ * ★ 前提：本 hook 只能在 `CopilotKitProvider` 子树里用 ——
+ * `useCopilotKit()` 在没有 provider 时会直接 throw（源码已核实）。
+ * 卡片本来就只在 provider 的 `renderActivityMessages` 里渲染，满足该前提。
  */
 export function useInterruptSubmit(agent: unknown): InterruptSubmit {
   const [notice, setNotice] = useState<string | null>(null);
+  const { copilotkit } = useCopilotKit();
 
   const submit = useCallback(
     (action: ComponentAction): void => {
@@ -251,23 +278,31 @@ export function useInterruptSubmit(agent: unknown): InterruptSubmit {
         setNotice('当前没有待回复的中断，答案未送出。请稍后重试，或直接在对话里回复。');
         return;
       }
-      if (typeof interrupt.resolve !== 'function') {
-        setNotice('中断对象未提供 resolve()，答案未送出。');
+
+      // ③' 中断缺 id → 拼不出 resume 条目，发出去也没人认领。
+      const interruptId = interrupt.id;
+      if (typeof interruptId !== 'string' || interruptId.length === 0) {
+        setNotice('中断缺少 id，拼不出 resume 条目，答案未送出。');
         return;
       }
 
-      // ④ resolve 可能同步抛、也可能返回 rejected Promise —— 两条路都要可见。
+      // ★ 能走到这里说明 `agent` 上确实挂着 pendingInterrupts，它必然是个对象。
+      const resume: ResumeEntry[] = [
+        { interruptId, status: 'resolved', payload: { answers: plan.answers } },
+      ];
+
+      // ④ runAgent 可能同步抛、也可能返回 rejected Promise —— 两条路都要可见。
       try {
-        void Promise.resolve(interrupt.resolve({ answers: plan.answers })).catch(
-          (error: unknown) => {
-            setNotice(`提交失败：${describeError(error)}`);
-          },
-        );
+        void Promise.resolve(
+          copilotkit.runAgent({ agent: agent as AbstractAgent, resume }),
+        ).catch((error: unknown) => {
+          setNotice(`提交失败：${describeError(error)}`);
+        });
       } catch (error) {
         setNotice(`提交失败：${describeError(error)}`);
       }
     },
-    [agent],
+    [agent, copilotkit],
   );
 
   return { submit, notice };

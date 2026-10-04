@@ -10,6 +10,20 @@ import { createElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor, cleanup } from '@testing-library/react';
 
+/**
+ * 本文件只用 `aguiRenderers` 的纯函数 `planAnswers`，但那个模块**运行时**会
+ * `import { useCopilotKit } from '@copilotkit/react-core/v2'`，而该包的入口
+ * `import './index.css'` —— node/vitest 加载不了 `.css`（`ERR_UNKNOWN_FILE_EXTENSION`，
+ * 全量跑会让整条 suite 挂掉）。所以这里把它桩掉；这两份用例压根不需要真的
+ * CopilotKit，只需要模块能被加载。（同款处理见 `aguiRenderers.test.ts`。）
+ */
+vi.mock('@copilotkit/react-core/v2', () => ({
+  useCopilotKit: () => ({
+    copilotkit: { runAgent: async () => ({}) },
+    executingToolCallIds: new Set<string>(),
+  }),
+}));
+
 import ComponentRenderer, {
   toFieldCallbacks,
   type RenderableNode,

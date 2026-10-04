@@ -9,6 +9,18 @@ import { createElement } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 
+/**
+ * 与 `ComponentRenderer.test.ts` 同款处理：本文件只用 `aguiRenderers` 的纯函数
+ * `planAnswers`，但该模块运行时会 import `@copilotkit/react-core/v2`（入口带
+ * `import './index.css'`，node/vitest 加载不了），必须桩掉才能被加载。
+ */
+vi.mock('@copilotkit/react-core/v2', () => ({
+  useCopilotKit: () => ({
+    copilotkit: { runAgent: async () => ({}) },
+    executingToolCallIds: new Set<string>(),
+  }),
+}));
+
 import ClarifyOptions from './ClarifyOptions';
 import { planAnswers } from './aguiRenderers';
 import { zClarifyField, makeFormKey } from '@/shared/plan/types';

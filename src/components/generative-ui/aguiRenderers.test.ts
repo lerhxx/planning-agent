@@ -8,9 +8,48 @@
  */
 import { createElement } from 'react';
 import type { ZodType } from 'zod';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { AbstractAgent, ActivityMessage } from '@copilotkit/react-core/v2';
+import type {
+  AbstractAgent,
+  ActivityMessage,
+  ResumeEntry,
+} from '@copilotkit/react-core/v2';
+
+/**
+ * `useCopilotKit()` 在无 provider 时会直接 throw，而澄清卡的应答通路就是它返回的
+ * `copilotkit.runAgent({ agent, resume })`。所以这里把 hook 换成可控桩：
+ * 断言的落点是「runAgent 收到了正确的 resume」，而不是"没抛错"。
+ */
+const mocks = vi.hoisted(() => ({
+  runAgent: vi.fn(async (_params: unknown): Promise<unknown> => ({})),
+}));
+
+/**
+ * ★ 这里**故意不** `importOriginal()` 展开真实模块：
+ * `@copilotkit/react-core/v2` 的入口会 `import './index.css'`，node/vitest 加载不了
+ * （`ERR_UNKNOWN_FILE_EXTENSION ".css"`），一展开整条 suite 就挂了。
+ * 运行时从这个模块取用的只有 `useCopilotKit` 一个值（其余全是 `import type`，
+ * 编译后消失），所以只桩这一个就够了 —— 已用 grep 核对过全仓引用。
+ */
+vi.mock('@copilotkit/react-core/v2', () => ({
+  useCopilotKit: () => ({
+    copilotkit: { runAgent: mocks.runAgent },
+    executingToolCallIds: new Set<string>(),
+  }),
+}));
+
+interface RunAgentParams {
+  agent?: unknown;
+  resume?: ResumeEntry[];
+}
+
+/** `runAgent` 第一次调用的参数（没有调用过则测试直接失败在这里）。 */
+function lastRunAgentParams(): RunAgentParams {
+  const calls = mocks.runAgent.mock.calls;
+  if (calls.length === 0) throw new Error('runAgent 一次都没被调用');
+  return calls[calls.length - 1][0] as RunAgentParams;
+}
 
 import {
   aguiActivityRenderers,
@@ -69,6 +108,12 @@ const MALFORMED_CONTENT: Record<string, Record<string, unknown>> = {
   CalendarField: { tabs: 'not-an-array' },
   ChoiceGroupField: { groups: 'not-an-array' },
 };
+
+beforeEach(() => {
+  // 每个用例都从"干净且默认成功"的 runAgent 出发，避免上一条的 reject 污染下一条。
+  mocks.runAgent.mockClear();
+  mocks.runAgent.mockImplementation(async (_params: unknown): Promise<unknown> => ({}));
+});
 
 afterEach(() => {
   cleanup();
@@ -329,7 +374,7 @@ describe('aguiActivityRenderers', () => {
     }
   });
 
-  it('澄清答案送不出去时给出可见提示，绝不静默丢弃', async () => {
+  it('澄清答案送不出去时给出可见提示，绝不静默丢弃（且绝不发起 run）', async () => {
     const renderer = rendererOf('ClarifyOptions');
 
     render(
@@ -349,11 +394,14 @@ describe('aguiActivityRenderers', () => {
 
     expect(await screen.findByRole('status')).toBeTruthy();
     expect(screen.getByRole('status').textContent ?? '').toContain('当前没有待回复的中断');
+    // ★ 没有中断就不该发起 run —— 否则等于凭空续跑一次 agent。
+    expect(mocks.runAgent).not.toHaveBeenCalled();
   });
 
-  it('有 pending interrupt 时，澄清答案经 resolve({ answers }) 回灌', async () => {
-    const resolve = vi.fn();
+  it('★ 有 pending interrupt 时，答案经 runAgent 的 resume 回灌（中断本身没有 resolve）', async () => {
     const renderer = rendererOf('ClarifyOptions');
+    // ★ 服务端下发的中断就是个**纯数据对象**：只有 id/reason，没有任何方法。
+    const agent = makeAgent([{ id: 'interrupt-1', reason: '需要预算' }]);
 
     render(
       createElement(renderer.render, {
@@ -365,18 +413,30 @@ describe('aguiActivityRenderers', () => {
           options: [{ id: '500', label: '≤ ¥500' }],
         },
         message: fakeMessage,
-        agent: makeAgent([{ id: 'interrupt-1', resolve }]),
+        agent,
       }),
     );
 
     fireEvent.click(await screen.findByText('≤ ¥500'));
 
     await waitFor(() => {
-      expect(resolve).toHaveBeenCalledTimes(1);
+      expect(mocks.runAgent).toHaveBeenCalledTimes(1);
     });
-    expect(resolve).toHaveBeenCalledWith({
+
+    const params = lastRunAgentParams();
+    // ① 续跑的是这个 agent
+    expect(params.agent).toBe(agent);
+    // ② resume 只交代**这一条**中断（其余 pending 由外壳自动补 cancelled）
+    expect(params.resume).toHaveLength(1);
+    const entry = params.resume?.[0];
+    expect(entry?.interruptId).toBe('interrupt-1');
+    expect(entry?.status).toBe('resolved');
+    // ③ 载荷键必须是 clarify:<字段> —— 内核 applyAnswers 只认这个形状
+    expect(entry?.payload).toEqual({
       answers: { 'clarify:constraint.budget': '500' },
     });
+    // ④ 提交成功后不该留下"失败提示"
+    expect(screen.queryByRole('status')).toBeNull();
   });
 });
 
@@ -587,9 +647,8 @@ describe('planAnswers · 工具澄清（submit_form → makeFormKey，K3）', ()
   });
 });
 
-describe('答案发不得时：可见提示 + 绝不调用 resolve', () => {
+describe('答案发不得时：可见提示 + 绝不发起 run', () => {
   it('questionId 不是 clarify: 形 → 有中断也不发，且给出可见提示', async () => {
-    const resolve = vi.fn();
     const renderer = rendererOf('ClarifyOptions');
 
     render(
@@ -601,7 +660,7 @@ describe('答案发不得时：可见提示 + 绝不调用 resolve', () => {
           options: [{ id: 'opt-a', label: '方案 A' }],
         },
         message: fakeMessage,
-        agent: makeAgent([{ id: 'interrupt-1', resolve }]),
+        agent: makeAgent([{ id: 'interrupt-1', reason: '需要信息' }]),
       }),
     );
 
@@ -609,8 +668,60 @@ describe('答案发不得时：可见提示 + 绝不调用 resolve', () => {
 
     expect(await screen.findByRole('status')).toBeTruthy();
     expect(screen.getByRole('status').textContent ?? '').toContain('答案未送出');
-    // ★ 关键：不能"看起来提交了" —— resolve 一次都没被调用。
-    expect(resolve).not.toHaveBeenCalled();
+    // ★ 关键：不能"看起来提交了" —— runAgent 一次都没被调用。
+    expect(mocks.runAgent).not.toHaveBeenCalled();
+  });
+
+  it('中断缺 id → 拼不出 resume 条目，不发起 run 且给出可见提示', async () => {
+    const renderer = rendererOf('ClarifyOptions');
+
+    render(
+      createElement(renderer.render, {
+        activityType: 'ClarifyOptions',
+        content: {
+          questionId: 'clarify:constraint.budget',
+          prompt: '预算上限是多少？',
+          options: [{ id: '500', label: '≤ ¥500' }],
+        },
+        message: fakeMessage,
+        // 服务端没给 id（只有 reason）—— resume 条目无从认领，发了也是白发。
+        agent: makeAgent([{ reason: '需要预算' }]),
+      }),
+    );
+
+    fireEvent.click(await screen.findByText('≤ ¥500'));
+
+    expect(await screen.findByRole('status')).toBeTruthy();
+    expect(screen.getByRole('status').textContent ?? '').toContain('中断缺少 id');
+    expect(mocks.runAgent).not.toHaveBeenCalled();
+  });
+
+  it('runAgent 失败 → 错误文案可见，绝不吞掉', async () => {
+    mocks.runAgent.mockRejectedValueOnce(new Error('网络断了'));
+    const renderer = rendererOf('ClarifyOptions');
+
+    render(
+      createElement(renderer.render, {
+        activityType: 'ClarifyOptions',
+        content: {
+          questionId: 'clarify:constraint.budget',
+          prompt: '预算上限是多少？',
+          options: [{ id: '500', label: '≤ ¥500' }],
+        },
+        message: fakeMessage,
+        agent: makeAgent([{ id: 'interrupt-1', reason: '需要预算' }]),
+      }),
+    );
+
+    fireEvent.click(await screen.findByText('≤ ¥500'));
+
+    // 提交**确实**发出去了（失败不是"没发"）……
+    await waitFor(() => {
+      expect(mocks.runAgent).toHaveBeenCalledTimes(1);
+    });
+    // ……但失败必须在界面上说清楚。
+    expect(await screen.findByRole('status')).toBeTruthy();
+    expect(screen.getByRole('status').textContent ?? '').toContain('网络断了');
   });
 });
 
