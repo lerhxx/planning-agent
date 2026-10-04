@@ -2,6 +2,9 @@
  * `POST /api/agui` — AG-UI SSE transport for the planning kernel.
  *
  * This endpoint intentionally lives beside (and does not modify) `/api/run`.
+ *
+ * 附件通道：AG-UI 协议没有附件槽位，附件走 `forwardedProps.attachments`
+ * （解析与 K9 兜底见 `./attachments`）。
  */
 import {
   EventType,
@@ -18,6 +21,11 @@ import { createMockRuntime } from '@/src/core/runtime/mock';
 import { registerAllDomains } from '@/src/domains';
 import { resolveDomainId } from '@/src/agui/domain';
 import { createTranslator, mergeResumeAnswers } from '@/src/agui/translate';
+import {
+  BAD_ATTACHMENTS,
+  parseForwardedAttachments,
+  resolveRequireConstraints,
+} from './attachments';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 30;
@@ -89,6 +97,21 @@ export async function POST(request: Request): Promise<Response> {
       { status: 400 },
     );
   }
+
+  // 附件通道：`forwardedProps.attachments` → `EngineInput.attachments`。
+  // 校验失败必须 400（BAD_ATTACHMENTS），绝不退化成"当没传"——静默丢附件最难排查。
+  const parsedAttachments = parseForwardedAttachments(input.forwardedProps);
+  if (!parsedAttachments.ok) {
+    return Response.json(
+      {
+        error: BAD_ATTACHMENTS,
+        message: parsedAttachments.message,
+        issues: parsedAttachments.issues,
+      },
+      { status: 400 },
+    );
+  }
+  const attachments = parsedAttachments.attachments;
 
   registerAllDomains();
 
@@ -181,8 +204,11 @@ export async function POST(request: Request): Promise<Response> {
             goal,
             domainId,
             simulate: options.simulate,
-            requireConstraints: options.requireConstraints,
+            // ★ K9 兜底：有附件时强制关掉 requireConstraints（见 ./attachments）。
+            requireConstraints: resolveRequireConstraints(options.requireConstraints, attachments),
             ...(answers === undefined ? {} : { answers }),
+            // 有才给：没传附件时不塞 `[]`，保持与既有 run options 一致的风格。
+            ...(attachments === undefined ? {} : { attachments }),
           },
           {
             runtime: createMockRuntime({ latencyMs: 120, replanMode: options.replanMode }),
