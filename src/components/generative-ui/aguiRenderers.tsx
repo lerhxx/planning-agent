@@ -229,19 +229,24 @@ function readMessageId(message: unknown): string | null {
 export const PLAN_ACTIVITY_TYPE = 'plan';
 
 /**
- * `plan` 活动的**传输层** schema：刻意放宽到 `unknown`。
+ * **所有**渲染器的传输层 content schema：一律放行（`unknown`）。
  *
- * ★ 为什么不用 `zPlanViewProps`（它其实**能**接住服务端那份 `{planId, revision,
- * status, summary, steps}` —— status/revision/steps 都有默认值，planId/summary 可选）：
+ * ★ 为什么不放组件自己的严格 schema（哪怕是"能接住"的那个）：
  * CopilotKit 在调用 `render` **之前**会先拿 `content` 做一次 `~standard.validate()`，
  * 失败就直接 `console.warn` + `return null` —— 也就是**整张卡片不渲染**，
  * 我们的三级降级链根本没机会跑（`useRenderActivityMessage` 的实现，已核实）。
  * 那正是本项目最忌讳的"白屏"。
  *
- * 所以这里只做"放行"，**真正的校验留在 `ComponentRenderer` 里**（它用 `zPlanViewProps`）：
- * 合法 → 渲染 PlanView；不合法 → 落到原始载荷/错误态/骨架，用户看得见。
+ * ★ 而且这不是理论风险，**必然发生**：`ACTIVITY_SNAPSHOT` 的 content 起始是 `{}`，
+ * 之后靠 `ACTIVITY_DELTA` 逐条 JSON Patch 长出 —— **中间态的 content 一定不满足
+ * `def.schema`**（例如 `StepItem` 必填 `id`，在 `id` 到达前的每一帧都不合法）。
+ * 若这里把关，卡片在"长出"的全过程中会一直是空白，直到最后一帧才可能显示；
+ * 而 `decideDegrade` 本来就是为这个场景设计的（props 未补齐 → 骨架）。
+ *
+ * 所以这里只做"放行"，**真正的校验留在 `ComponentRenderer` 里**（它用 `def.schema`）：
+ * 合法 → 渲染组件；不合法 / 未补齐 → 骨架或原始载荷，用户看得见。
  */
-export const zPlanActivityContent = z.unknown();
+export const zActivityContent = z.unknown();
 
 export interface PlanActivityCardProps {
   /** 活动消息的 content（未经信任，下面会 safeParse）。 */
@@ -320,7 +325,7 @@ function createPlanActivityRenderer(): AnyActivityMessageRenderer {
   }
   return {
     activityType: PLAN_ACTIVITY_TYPE,
-    content: zPlanActivityContent,
+    content: zActivityContent,
     render: PlanActivityView,
   };
 }
@@ -368,7 +373,9 @@ function createRegistryRenderer(
 
   return {
     activityType: definition.name,
-    content: definition.schema,
+    // ★ 传输层放行；真正的校验在 `ComponentRenderer` 里用 `definition.schema`。
+    // 详见 `zActivityContent` 的注释（否则 CopilotKit 会先校验失败并整卡不渲染）。
+    content: zActivityContent,
     render: RegistryActivityView,
   };
 }
@@ -380,8 +387,7 @@ function createRegistryRenderer(
  */
 export const WILDCARD_ACTIVITY_TYPE = '*';
 
-/** 兜底渲染器的 content 同样放宽：见 `zPlanActivityContent` 的注释。 */
-export const zFallbackActivityContent = z.unknown();
+/** 兜底渲染器的 content 同样放行：见 `zActivityContent` 的注释。 */
 
 /**
  * 兜底渲染器：任何**没有专属渲染器**的活动类型都落到这里。
@@ -423,7 +429,7 @@ function createFallbackActivityRenderer(): AnyActivityMessageRenderer {
 
   return {
     activityType: WILDCARD_ACTIVITY_TYPE,
-    content: zFallbackActivityContent,
+    content: zActivityContent,
     render: FallbackActivityView,
   };
 }

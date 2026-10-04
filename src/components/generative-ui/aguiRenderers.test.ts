@@ -49,12 +49,30 @@ function schemaOf(activityType: string): ZodType {
 /** 降级态的可见指纹：`RawPayloadCard` / `ErrorState` / `SkeletonList` 三者之一。 */
 const DEGRADE_MARKER = /原始载荷|出错|组件生成中|组件加载中/;
 
+/**
+ * 每个内核组件一份"必然被它自己的 schema 拒绝"的载荷。
+ *
+ * 尽量取 **delta 中间态的真实形态**（字段只长了一半），而不是随手造一个垃圾值 ——
+ * 这样断言才有说服力：`StepItem` 缺必填 `id`、`ChoiceGroupField` 的 `groups` 还是字符串……
+ * 都是 `ACTIVITY_DELTA` 逐条长出过程中的真实中间帧。
+ */
+const MALFORMED_CONTENT: Record<string, Record<string, unknown>> = {
+  PlanView: { steps: 'not-an-array' },
+  StepItem: { title: '订机票' }, // 缺必填 id
+  RawPayloadCard: { title: 42 },
+  ClarifyOptions: { options: 'not-an-array' },
+  ErrorState: { recoverable: 'yes' },
+  SkeletonList: { rows: 'three' },
+  CalendarField: { tabs: 'not-an-array' },
+  ChoiceGroupField: { groups: 'not-an-array' },
+};
+
 afterEach(() => {
   cleanup();
 });
 
 describe('aguiActivityRenderers', () => {
-  it('注册表里每个组件都有一个同名渲染器，content 就是它自己的 schema', () => {
+  it('注册表里每个组件都有一个同名渲染器，且传输层一律放行', () => {
     registerCoreUIComponents();
     const names = aguiActivityRenderers.map((item) => item.activityType);
 
@@ -63,7 +81,13 @@ describe('aguiActivityRenderers', () => {
       expect(names, `注册表里的 ${name} 没有对应渲染器`).toContain(name);
       const definition = resolveComponent('', name);
       expect(definition, `注册表里查不到 ${name}`).toBeDefined();
-      expect(rendererOf(name).content).toBe(definition!.schema);
+      // ★ 传输层**不再**等于 `def.schema`：它必须放行任意载荷，
+      // 否则 CopilotKit 会在 render 之前校验失败并整卡不渲染（白屏）。
+      // 真正的校验留给 ComponentRenderer —— 下面有用例逐个证明它确实还在校验。
+      expect(
+        schemaOf(name).safeParse({ 半截字段: [1, 2, 3] }).success,
+        `${name} 的传输层没有放行`,
+      ).toBe(true);
     }
 
     // 反向：渲染器也不能凭空多出注册表里没有的类型
@@ -131,6 +155,63 @@ describe('aguiActivityRenderers', () => {
     };
     expect(schemaOf(PLAN_ACTIVITY_TYPE).safeParse(malformed).success).toBe(true);
     expect(zPlanViewProps.safeParse(malformed).success).toBe(false);
+  });
+
+  it('每个内核组件：传输层放行 + def.schema 拒 + 渲染落降级态（三者缺一不可）', async () => {
+    registerCoreUIComponents();
+
+    for (const name of listCoreComponents()) {
+      const bad = MALFORMED_CONTENT[name];
+      expect(bad, `缺少 ${name} 的坏载荷夹具`).toBeDefined();
+
+      // ① 传输层必须放行 —— 否则 CopilotKit 会在 render 之前就 return null（白屏）。
+      expect(schemaOf(name).safeParse(bad).success, `${name} 的传输层没有放行`).toBe(true);
+
+      // ② 真正的校验必须还在 def.schema 里 —— 只测 ① 是假绿。
+      const definition = resolveComponent('', name);
+      expect(definition).toBeDefined();
+      expect(
+        definition!.schema.safeParse(bad).success,
+        `${name} 的 schema 竟然接受了坏载荷（校验被挪走了）`,
+      ).toBe(false);
+
+      // ③ 渲染必须是降级态而不是空白 —— 只测 ② 证明不了降级链真的接管了。
+      const { container, unmount } = render(
+        createElement(rendererOf(name).render, {
+          activityType: name,
+          content: bad,
+          message: fakeMessage,
+          agent: makeAgent(),
+        }),
+      );
+      await waitFor(() => {
+        expect(
+          container.textContent ?? '',
+          `${name} 拿到坏载荷后渲染成空白，降级链没接管`,
+        ).toMatch(DEGRADE_MARKER);
+      });
+      unmount();
+    }
+  });
+
+  it('delta 中间态（必填键还没到）渲染骨架，而不是空白', async () => {
+    // `ClarifyOptions.requiredProps = ['prompt']`：prompt 到达之前 schema 仍通过
+    // （prompt 可选），但 props 未补齐 → `decideDegrade` 判骨架。
+    // 这正是 ACTIVITY_SNAPSHOT（content = {}）→ 逐条 delta 长出的第一帧。
+    const renderer = rendererOf('ClarifyOptions');
+
+    const { container } = render(
+      createElement(renderer.render, {
+        activityType: 'ClarifyOptions',
+        content: {},
+        message: fakeMessage,
+        agent: makeAgent(),
+      }),
+    );
+
+    await waitFor(() => {
+      expect(container.textContent ?? '').toContain('组件生成中');
+    });
   });
 
   it('通配符渲染器存在，且未知活动类型落到降级态而不是空白', async () => {
