@@ -3,6 +3,11 @@
 import { useState, type ReactNode } from 'react';
 import type { ClarifyField } from '@/shared/plan/types';
 import type { ComponentAction, ClarifyOptionsProps } from './schema';
+// 直接 import，不用 lazy：`ClarifyOptions` 在注册表里本来就是 `lazy:false`，
+// 懒加载只会引入"加载失败 → 按钮失效"这一整类静默故障，换不到任何好处。
+import CalendarField from '../fields/CalendarField';
+import ChoiceGroupField from '../fields/ChoiceGroupField';
+import type { CalendarValue } from '../fields/CalendarField/schema';
 
 /**
  * 兜底组件 2/3：澄清点选 / 澄清表单。
@@ -64,69 +69,69 @@ export default function ClarifyOptions(
           />
         );
       case 'date':
+        // ★ `date` 不看 `field.options`（日历本来就没有候选项），所以不受下面
+        // "options 为空 → 暂无候选项"那条规则约束 —— 否则 date 会永远显示"暂无候选项"，
+        // 反而比原来的原生 input 更难用。
         return (
-          <input
-            type="date"
-            className={base}
-            value={typeof value === 'string' ? value : ''}
-            onChange={(event) => setValue(field.id, event.target.value)}
+          <CalendarField
+            // 只开单日期：区间与「灵活天数」没有下游消费者
+            // （`ClarifyField` 的 date 只能承载单个日期字符串），给了就是静默丢。
+            tabs={['date']}
+            calendarMode="single"
+            {...(typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+              ? { initialDate: value }
+              : {})}
+            showSkip={false}
+            showActions={false}
+            onChange={(next: CalendarValue) => {
+              // ★ 同样是静默丢的防线：只写 `single`，区间/天数一律不写草稿。
+              if (next.mode !== 'single') return;
+              setValue(field.id, next.date);
+            }}
           />
         );
+      // `multi` / `select` / `image-ref` 都是"从候选项里挑"，统一交给 ChoiceGroupField。
       case 'multi':
-        return (
-          <div className="flex flex-wrap gap-2">
-            {field.options.length === 0 ? (
-              <span className="text-[11px] text-[var(--color-text-weak)]">暂无候选项</span>
-            ) : (
-              field.options.map((option) => {
-                const selected = Array.isArray(value) && value.includes(option.id);
-                return (
-                  <label
-                    key={option.id}
-                    className={`flex cursor-pointer items-center gap-1.5 rounded-[var(--radius-control)] border px-2 py-1 text-xs transition ${
-                      selected
-                        ? 'border-[var(--color-accent)] bg-[var(--color-accent-soft)] text-[var(--color-accent-strong)]'
-                        : 'border-[var(--color-border)] text-[var(--color-text-secondary)] hover:bg-[var(--color-fill-soft)]'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selected}
-                      onChange={(event) => {
-                        const current = Array.isArray(value) ? value : [];
-                        setValue(
-                          field.id,
-                          event.target.checked
-                            ? [...current, option.id]
-                            : current.filter((item) => item !== option.id),
-                        );
-                      }}
-                    />
-                    {option.label}
-                  </label>
-                );
-              })
-            )}
-          </div>
-        );
-      // `select` 与 `image-ref` 同构：后者只是"候选来自本次输入的附件"，
-      // 组件不认识"图片"，只按 options 渲染下拉。
       case 'select':
-      case 'image-ref':
+      case 'image-ref': {
+        // 没有候选项 → 沿用原有提示，不渲染卡片（卡片渲染出来也是空的）。
+        if (field.options.length === 0) {
+          return <span className="text-[11px] text-[var(--color-text-weak)]">暂无候选项</span>;
+        }
+        const isMulti = field.kind === 'multi';
         return (
-          <select
-            className={base}
-            value={typeof value === 'string' ? value : ''}
-            onChange={(event) => setValue(field.id, event.target.value)}
-          >
-            <option value="">（未选择）</option>
-            {field.options.map((option) => (
-              <option key={option.id} value={option.id}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+          <ChoiceGroupField
+            groups={[
+              {
+                id: field.id,
+                title: field.label,
+                multi: isMulti,
+                options: field.options.map((option) => ({
+                  id: option.id,
+                  label: option.label,
+                  ...(option.description === undefined ? {} : { hint: option.description }),
+                })),
+              },
+            ]}
+            initialSelections={{
+              [field.id]: Array.isArray(value) ? value : value ? [value] : [],
+            }}
+            // 容器内是单题，不需要「1. 2. 3.」序号。
+            showIndex={false}
+            // ★ 门控点必须唯一：这里恒为 false，交给本组件的 `missingRequired`
+            // 按 `field.required` 门控底部提交按钮。`requireAll` 会把**非必填题**
+            // 也拦住（schema.ts 明写了），两套门控打架的结果是用户永远提交不了。
+            requireAll={false}
+            showActions={false}
+            onChange={(selections: Record<string, string[]>) => {
+              const picked = selections[field.id] ?? [];
+              // 多选存 string[]（底部 submit() 会 JSON.stringify，与 K4 一致）；
+              // 单选存单个 string。
+              setValue(field.id, isMulti ? picked : (picked[0] ?? ''));
+            }}
+          />
         );
+      }
       case 'text':
       default:
         return (
