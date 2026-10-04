@@ -19,6 +19,60 @@ export interface RenderableNode {
   traceId?: string;
 }
 
+/* ------------------------------------------------------------------ *
+ * 字段型卡片的回调桥接
+ * ------------------------------------------------------------------ */
+
+/** `CalendarField` / `ChoiceGroupField` 这类"选值控件"的回调面。 */
+export interface FieldCallbacks {
+  onConfirm?: (value: unknown) => void;
+  onSkip?: () => void;
+}
+
+function readStringProp(props: Record<string, unknown>, key: string): string | undefined {
+  const value = props[key];
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+/**
+ * 把字段型卡片（`CalendarField` / `ChoiceGroupField`）的 `onConfirm` / `onSkip`
+ * 桥接到统一的 `onAction` 上。
+ *
+ * ★ 为什么必须桥：`ComponentRenderer` 只给组件传 `onAction`，而这两张卡收的是
+ * `onConfirm` / `onSkip`。不桥的话确认按钮点了**没人接** —— 不报错、什么都不发生，
+ * 正是本项目最忌讳的静默失效。
+ *
+ * ★ `questionId` 取不到时**照样产出回调**：不在这里静默吞掉用户的点击，
+ * 而是把动作交出去，由 `planAnswers` 判定 `ok:false` 并给出可见原因。
+ *
+ * 导出为纯函数，便于单测（不依赖 React）。
+ */
+export function toFieldCallbacks(
+  node: RenderableNode,
+  onAction?: (action: ComponentAction) => void,
+): FieldCallbacks {
+  // 没有回灌通道 → 不产出回调（空壳回调比没有回调更糟：点了像成功，其实没人接）。
+  if (onAction === undefined) return {};
+
+  const props = node.props ?? {};
+  const questionId = readStringProp(props, 'questionId');
+  const fieldId = readStringProp(props, 'fieldId') ?? readStringProp(props, 'id') ?? 'value';
+
+  return {
+    onConfirm: (value: unknown): void => {
+      onAction({
+        type: 'submit_form',
+        questionId,
+        // 非字符串值按 K3 用 JSON 编码，由领域侧 `safeParse` 还原。
+        values: { [fieldId]: typeof value === 'string' ? value : JSON.stringify(value) },
+      });
+    },
+    onSkip: (): void => {
+      onAction({ type: 'submit_form', questionId, values: {} });
+    },
+  };
+}
+
 export interface ComponentRendererProps {
   node: RenderableNode;
   /** 只用于**查组件注册表**，不用于取降级链。 */
@@ -90,6 +144,7 @@ export default function ComponentRenderer(props: ComponentRendererProps) {
       <LazyComponent
         {...(parsed?.success ? (parsed.data as Record<string, unknown>) : {})}
         onAction={onAction}
+        {...toFieldCallbacks(node, onAction)}
       />
     </Suspense>
   );
