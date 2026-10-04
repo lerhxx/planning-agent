@@ -1,6 +1,7 @@
 import { EventType } from '@ag-ui/core';
 import { describe, expect, it } from 'vitest';
 import type { JsonPatchOperation } from '@/shared/stream/events';
+import { makeFormKey, parseFormKey } from '@/shared/plan/types';
 import type { RunTerminalStatus } from '@/shared/run/types';
 import { makeStep } from '@/src/test/fixtures';
 import { createTranslator, mergeResumeAnswers } from './translate';
@@ -235,6 +236,31 @@ describe('mergeResumeAnswers', () => {
       'question-1::field-1': 'option-a',
       'question-2::field-2': 'option-b',
     });
+  });
+
+  it('keeps answer keys verbatim: form keys stay parseable, goal keys stay engine-issued', () => {
+    const formKey = makeFormKey('clarify:trip.budget', 'budget');
+    const goalKey = 'clarify:constraint.budget';
+    const merged = mergeResumeAnswers([
+      {
+        status: 'resolved',
+        payload: { answers: { [formKey]: '["mid"]', [goalKey]: 'provide' } },
+      },
+    ]);
+
+    // No second makeFormKey composition on the server: that would mint
+    // `qid::qid::fid`, which no consumer looks up and which fails silently.
+    expect(Object.keys(merged).sort()).toEqual([formKey, goalKey].sort());
+    // `::` is the form-key delimiter and must appear exactly once: `parseFormKey`
+    // splits on the *last* occurrence, so a doubled delimiter would reappear as a
+    // mangled questionId that no domain pack looks up.
+    expect(formKey.split('::').length - 1).toBe(1);
+    expect(parseFormKey(formKey)).toEqual({
+      questionId: 'clarify:trip.budget',
+      fieldId: 'budget',
+    });
+    expect(merged[formKey]).toBe('["mid"]');
+    expect(merged[goalKey]).toBe('provide');
   });
 
   it('rejects malformed resolved payloads instead of silently losing answers', () => {

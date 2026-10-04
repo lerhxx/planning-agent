@@ -26,6 +26,16 @@ const zWrappedAnswers = z.object({ answers: zAnswers });
  * Both the CopilotKit wrapper shape (`{ answers: {...} }`) and a direct answer map
  * are accepted. Later resume entries win when the same answer key occurs twice.
  * Invalid resolved payloads throw instead of being silently discarded.
+ *
+ * ★ **Keys are passed through verbatim — no `makeFormKey` / prefix rewriting here.**
+ * The answer key is minted exactly once, on the client:
+ * - tool clarification → `makeFormKey(questionId, fieldId)` = `questionId::fieldId`
+ *   (consumed by the domain pack, e.g. `src/domains/travel/tools.ts`);
+ * - goal clarification → the engine-issued `questionId` (e.g. `clarify:constraint.budget`),
+ *   consumed by `applyAnswers` in `src/core/goal/clarify.ts`.
+ * Composing a key a second time on this side would yield `qid::qid::fid`, which
+ * no consumer looks up and which fails silently — exactly the failure class this
+ * endpoint is required to surface rather than swallow.
  */
 export function mergeResumeAnswers(
   resume: readonly Pick<ResumeEntry, 'status' | 'payload'>[],
