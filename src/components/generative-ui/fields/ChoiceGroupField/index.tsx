@@ -22,8 +22,10 @@ export default function ChoiceGroupField(props: Partial<ChoiceGroupFieldProps>) 
     confirmLabel = '确认',
     skipLabel,
     requireAll = false,
+    showActions = true,
     onConfirm,
     onSkip,
+    onChange,
   } = props;
 
   /** 本地草稿：`groupId -> 已选 optionId 列表`（单选组长度恒 ≤ 1）。 */
@@ -32,17 +34,20 @@ export default function ChoiceGroupField(props: Partial<ChoiceGroupFieldProps>) 
   const selectedOf = (groupId: string): string[] => selections[groupId] ?? [];
 
   const toggle = (groupId: string, multi: boolean, optionId: string): void => {
-    setSelections((previous) => {
-      const current = previous[groupId] ?? [];
-      if (multi) {
-        const next = current.includes(optionId)
-          ? current.filter((id) => id !== optionId)
-          : [...current, optionId];
-        return { ...previous, [groupId]: next };
-      }
+    const current = selectedOf(groupId);
+    let nextList: string[];
+    if (multi) {
+      nextList = current.includes(optionId)
+        ? current.filter((id) => id !== optionId)
+        : [...current, optionId];
+    } else {
       // 单选：重复点同一个 = 取消（允许反悔），点别的 = 换选。
-      return { ...previous, [groupId]: current[0] === optionId ? [] : [optionId] };
-    });
+      nextList = current[0] === optionId ? [] : [optionId];
+    }
+    const next = { ...selections, [groupId]: nextList };
+    setSelections(next);
+    // 旁路通知：同步回传**完整**选中态，不改动本地 state 的所有权。
+    onChange?.({ ...next });
   };
 
   const allAnswered = groups.every((group) => selectedOf(group.id).length > 0);
@@ -140,25 +145,27 @@ export default function ChoiceGroupField(props: Partial<ChoiceGroupFieldProps>) 
     <div className="w-full rounded-[var(--radius-card)] border border-[var(--color-divider)] bg-[var(--color-card)] p-5 shadow-[var(--shadow-card)]">
       {groups.map((_, index) => renderGroup(index))}
 
-      <div className="mt-4 flex items-center justify-end gap-2">
-        {skipLabel ? (
+      {showActions ? (
+        <div className="mt-4 flex items-center justify-end gap-2">
+          {skipLabel ? (
+            <button
+              type="button"
+              onClick={() => onSkip?.()}
+              className="rounded-[var(--radius-pill)] bg-[var(--color-fill-soft)] px-5 py-2.5 text-sm text-[var(--color-text-strong)] transition hover:bg-[var(--color-fill-strong)]"
+            >
+              {skipLabel}
+            </button>
+          ) : null}
           <button
             type="button"
-            onClick={() => onSkip?.()}
-            className="rounded-[var(--radius-pill)] bg-[var(--color-fill-soft)] px-5 py-2.5 text-sm text-[var(--color-text-strong)] transition hover:bg-[var(--color-fill-strong)]"
+            disabled={confirmDisabled || groups.length === 0}
+            onClick={() => onConfirm?.({ ...selections })}
+            className="rounded-[var(--radius-pill)] bg-[var(--color-ink)] px-6 py-2.5 text-sm text-[var(--color-text-on-accent)] transition hover:bg-[var(--color-ink-hover)] disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {skipLabel}
+            {confirmLabel}
           </button>
-        ) : null}
-        <button
-          type="button"
-          disabled={confirmDisabled || groups.length === 0}
-          onClick={() => onConfirm?.({ ...selections })}
-          className="rounded-[var(--radius-pill)] bg-[var(--color-ink)] px-6 py-2.5 text-sm text-[var(--color-text-on-accent)] transition hover:bg-[var(--color-ink-hover)] disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {confirmLabel}
-        </button>
-      </div>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import type { CalendarFieldProps, CalendarTab, CalendarValue } from './schema';
 
 /* ------------------------------------------------------------------ *
@@ -68,8 +68,10 @@ export default function CalendarField(props: Partial<CalendarFieldProps>) {
     confirmLabel = '确认',
     skipLabel = '暂不设置日期',
     showSkip = true,
+    showActions = true,
     onConfirm,
     onSkip,
+    onChange,
   } = props;
 
   const [tab, setTab] = useState<CalendarTab>(defaultTab);
@@ -152,6 +154,21 @@ export default function CalendarField(props: Partial<CalendarFieldProps>) {
     return null;
   };
   const value = confirmValue();
+
+  /**
+   * 旁路通知：取值**真的变了**才回传一次。
+   *
+   * 没有依赖数组（每次 render 后都跑），靠 `key` 去重 ——
+   * `value` 每次 render 都是新对象，直接放进依赖数组会每次都触发。
+   */
+  const notifiedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (value === null) return;
+    const key = JSON.stringify(value);
+    if (notifiedRef.current === key) return;
+    notifiedRef.current = key;
+    onChange?.(value);
+  });
 
   const capsuleOf = (index: number, key: string): { inCapsule: boolean; leftEdge: boolean; rightEdge: boolean } => {
     if (!range.start || !range.end || key < range.start || key > range.end) {
@@ -325,27 +342,29 @@ export default function CalendarField(props: Partial<CalendarFieldProps>) {
       {renderSegmented()}
       {tab === 'date' ? renderDatePanel() : renderFlexPanel()}
 
-      <div className="mt-3 flex items-center justify-end gap-2 px-5">
-        {showSkip ? (
+      {showActions ? (
+        <div className="mt-3 flex items-center justify-end gap-2 px-5">
+          {showSkip ? (
+            <button
+              type="button"
+              onClick={() => onSkip?.()}
+              className="rounded-[var(--radius-pill)] bg-[var(--color-fill-soft)] px-5 py-2.5 text-sm text-[var(--color-text-strong)] transition hover:bg-[var(--color-fill-strong)]"
+            >
+              {skipLabel}
+            </button>
+          ) : null}
           <button
             type="button"
-            onClick={() => onSkip?.()}
-            className="rounded-[var(--radius-pill)] bg-[var(--color-fill-soft)] px-5 py-2.5 text-sm text-[var(--color-text-strong)] transition hover:bg-[var(--color-fill-strong)]"
+            disabled={value === null}
+            onClick={() => {
+              if (value) onConfirm?.(value);
+            }}
+            className="rounded-[var(--radius-pill)] bg-[var(--color-ink)] px-6 py-2.5 text-sm text-[var(--color-text-on-accent)] transition hover:bg-[var(--color-ink-hover)] disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {skipLabel}
+            {confirmLabel}
           </button>
-        ) : null}
-        <button
-          type="button"
-          disabled={value === null}
-          onClick={() => {
-            if (value) onConfirm?.(value);
-          }}
-          className="rounded-[var(--radius-pill)] bg-[var(--color-ink)] px-6 py-2.5 text-sm text-[var(--color-text-on-accent)] transition hover:bg-[var(--color-ink-hover)] disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          {confirmLabel}
-        </button>
-      </div>
+        </div>
+      ) : null}
     </div>
   );
 }

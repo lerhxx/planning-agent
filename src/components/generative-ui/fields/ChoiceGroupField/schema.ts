@@ -41,6 +41,13 @@ export const zChoiceGroupFieldProps = z.object({
   skipLabel: z.string().min(1).optional(),
   /** 为 true 时：所有题都至少选一项才能确认（未传 required 的题也会被拦）。 */
   requireAll: z.boolean().default(false),
+  /**
+   * 是否渲染自带的「跳过 / 确认」按钮。**默认 true**（独立使用行为不变）。
+   *
+   * 被别的容器（`ClarifyOptions`）当**纯选值控件**内嵌时要传 `false` ——
+   * 否则会出现两个确认按钮，且两套提交门控打架。
+   */
+  showActions: z.boolean().default(true),
 });
 export type ChoiceGroupFieldDataProps = z.infer<typeof zChoiceGroupFieldProps>;
 
@@ -48,4 +55,11 @@ export type ChoiceGroupFieldDataProps = z.infer<typeof zChoiceGroupFieldProps>;
 export type ChoiceGroupFieldProps = ChoiceGroupFieldDataProps & {
   onConfirm?: (selections: Record<string, string[]>) => void;
   onSkip?: () => void;
+  /**
+   * 每次选值变化**立即**回传当前完整选中态（`groupId -> optionId[]`）。
+   *
+   * ★ 只是**旁路通知**，不是把组件改成受控组件：内部仍保留自己的本地 state，
+   * `showActions` 为 true 时照样能独立工作。两种用法互不干扰。
+   */
+  onChange?: (selections: Record<string, string[]>) => void;
 };

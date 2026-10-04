@@ -43,6 +43,13 @@ export const zCalendarFieldProps = z.object({
   confirmLabel: z.string().min(1).default('确认'),
   skipLabel: z.string().min(1).default('暂不设置日期'),
   showSkip: z.boolean().default(true),
+  /**
+   * 是否渲染自带的「跳过 / 确认」按钮。**默认 true**（独立使用行为不变）。
+   *
+   * 被别的容器（`ClarifyOptions`）当**纯选值控件**内嵌时要传 `false` ——
+   * 否则会出现两个确认按钮，且两套提交门控打架。
+   */
+  showActions: z.boolean().default(true),
 });
 export type CalendarFieldDataProps = z.infer<typeof zCalendarFieldProps>;
 
@@ -50,4 +57,13 @@ export type CalendarFieldDataProps = z.infer<typeof zCalendarFieldProps>;
 export type CalendarFieldProps = CalendarFieldDataProps & {
   onConfirm?: (value: CalendarValue) => void;
   onSkip?: () => void;
+  /**
+   * 每次选值变化**立即**回传当前取值（`CalendarValue | null` 中的非 null 值）。
+   *
+   * ★ 只是**旁路通知**，不是把组件改成受控组件：内部仍保留自己的本地 state，
+   * `showActions` 为 true 时照样能独立工作。两种用法互不干扰。
+   * 取值为 `range` / `flexible` 时由**调用方**自行决定是否接受 ——
+   * 本组件不替调用方做取舍（那会变成静默丢）。
+   */
+  onChange?: (value: CalendarValue) => void;
 };
