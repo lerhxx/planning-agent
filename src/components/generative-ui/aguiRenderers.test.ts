@@ -445,6 +445,9 @@ describe('planAnswers · 目标澄清（select_option → applyAnswers）', () =
     if (!plan.ok) return;
     for (const key of Object.keys(plan.answers)) {
       expect(key).toMatch(/^clarify:/);
+      // ★ 反向：目标澄清是**扁平选项**、没有 fieldId，绝不能走 makeFormKey ——
+      // 否则键会变成 `clarify:x::undefined`，`applyAnswers` 查不到 → 静默失效。
+      expect(key, `目标澄清键不该带 "::"（${key}）`).not.toContain('::');
     }
   });
 
