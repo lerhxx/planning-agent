@@ -39,8 +39,11 @@
 import { useCallback, useMemo, type ReactNode } from 'react';
 import { HttpAgent } from '@ag-ui/client';
 import { CopilotKitProvider } from '@copilotkit/react-core/v2';
-import { aguiActivityRenderers } from '@/src/components/generative-ui/aguiRenderers';
-import { registerAllUI } from '@/src/domains/ui';
+import {
+  DomainIdProvider,
+  aguiActivityRenderers,
+} from '@/src/components/generative-ui/aguiRenderers';
+import { defaultDomainId, registerAllUI } from '@/src/domains/ui';
 
 /**
  * 保留旧页面的启动注册：生成式组件**按名字**在注册表里查找（`ComponentRenderer`），
@@ -62,7 +65,19 @@ export interface ProvidersProps {
 
 export default function Providers({ children }: ProvidersProps): ReactNode {
   // 单例：整个应用生命周期内只创建一次。
-  const agent = useMemo<HttpAgent>(() => new HttpAgent({ url: AGUI_ENDPOINT }), []);
+  const agent = useMemo<HttpAgent>(() => {
+    const instance = new HttpAgent({ url: AGUI_ENDPOINT });
+    /**
+     * 领域 id 的唯一通道：AG-UI 的 `RunAgentInput.state`。
+     * `/api/agui` 从 `input.state`（或 `forwardedProps`）里读 `domainId`，
+     * 活动消息本身不带它，所以这里**同时**做两件事：
+     *   1. 写进 agent.state —— 每次 run 都会带上，服务端据此选领域；
+     *   2. 喂给 `DomainIdProvider` —— 客户端卡片查领域组件时用它。
+     * 两边同源，避免"服务端跑 travel、客户端按 demo 渲染"这种错位。
+     */
+    instance.state = { domainId: defaultDomainId };
+    return instance;
+  }, []);
 
   const selfManagedAgents = useMemo<Record<string, HttpAgent>>(
     () => ({ [DEFAULT_AGENT_ID]: agent }),
@@ -86,7 +101,12 @@ export default function Providers({ children }: ProvidersProps): ReactNode {
       renderActivityMessages={aguiActivityRenderers}
       onError={handleError}
     >
-      {children}
+      {/*
+       * 领域上下文：`ComponentRenderer` 查领域定制组件时需要 domainId，
+       * 而 AG-UI 活动消息不携带它，所以由外壳显式提供。缺省值 `''` 也能渲染
+       * （只命中内核通用组件表），包了之后才能拿到领域定制组件。
+       */}
+      <DomainIdProvider domainId={defaultDomainId}>{children}</DomainIdProvider>
     </CopilotKitProvider>
   );
 }
