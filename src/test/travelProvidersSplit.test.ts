@@ -114,21 +114,33 @@ describe('providers 拆分 · 依赖方向守卫（设计 §5.3）', () => {
     'index.ts': ['./poi', './compose', './planCheck', './mentions', './vision'],
   };
 
-  it('每个子模块只 import 允许的下游（禁止反向依赖）', () => {
-    for (const [file, allowed] of Object.entries(ALLOWED)) {
-      const imports = siblingImports(file);
-      for (const spec of imports) {
-        expect(allowed, `${file} 不应 import ${spec}`).toContain(spec);
+  // ★ 显式超时：这两条要把 6 个源文件整个读一遍再正则扫（纯 I/O + CPU）。
+  // 平时 ~1.4s，但全量跑且机器忙时实测撞穿过 vitest 默认的 5s
+  // （双倍负载复现过 `Test timed out in 5000ms`）。它们判的是"依赖方向"，
+  // 与墙钟无关，不该由"今天机器卡不卡"决定红绿。断言一字不动。
+  it(
+    '每个子模块只 import 允许的下游（禁止反向依赖）',
+    () => {
+      for (const [file, allowed] of Object.entries(ALLOWED)) {
+        const imports = siblingImports(file);
+        for (const spec of imports) {
+          expect(allowed, `${file} 不应 import ${spec}`).toContain(spec);
+        }
       }
-    }
-  });
+    },
+    60_000,
+  );
 
-  it('没有任何子模块反向 import 桶（index.ts）—— 否则就是循环依赖', () => {
-    for (const file of Object.keys(ALLOWED)) {
-      if (file === 'index.ts') continue;
-      expect(siblingImports(file), `${file} 不得 import ./index`).not.toContain('./index');
-    }
-  });
+  it(
+    '没有任何子模块反向 import 桶（index.ts）—— 否则就是循环依赖',
+    () => {
+      for (const file of Object.keys(ALLOWED)) {
+        if (file === 'index.ts') continue;
+        expect(siblingImports(file), `${file} 不得 import ./index`).not.toContain('./index');
+      }
+    },
+    60_000,
+  );
 
   it('mentions.ts 只依赖 shared，不依赖任何数据源子模块', () => {
     expect(siblingImports('mentions.ts')).toEqual([]);

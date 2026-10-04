@@ -31,8 +31,8 @@ import os from 'node:os';
 import nodePath from 'node:path';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { GET, POST } from '@/app/api/assets/route';
-import { createFileAssetStore, type AssetStore } from '@/app/api/assets/store';
+import { createAssetsHandlers, GET, POST } from '@/app/api/assets/route';
+import { createFileAssetStore, type AssetLookup, type AssetStore } from '@/app/api/assets/store';
 import {
   ATTACHMENT_MAX_COUNT,
   makeFormKey,
@@ -351,6 +351,44 @@ describe('POST /api/assets 的新边界', () => {
     expect(payload.error).toBe('ASSET_EXPIRED');
     expect(payload.assetId).toBe('6f1d3f10-0000-4000-8000-000000000000');
   });
+
+  it(
+    '★ 存储故障必须回 5xx，**绝不能是 410 ASSET_EXPIRED**（否则用户会去重新上传）',
+    async () => {
+      // 怎么造一次**真的**磁盘故障（不靠 mock、不靠 chmod）：把 `<assetId>.json`
+      // 变成**目录**。readFile 一个目录拿到的 errno 是 EISDIR —— 它不是 ENOENT，
+      // 所以正好落在"故障"那一侧。跨平台稳定，也不受 root 权限影响。
+      const brokenDir = await mkdtemp(nodePath.join(os.tmpdir(), 'qa-asset-broken-'));
+      try {
+        const assetId = '6f1d3f10-8888-4888-8888-888888888888';
+        mkdirSync(nodePath.join(brokenDir, `${assetId}.json`), { recursive: true });
+        const handlers = createAssetsHandlers(
+          createFileAssetStore(brokenDir, { ttlMs: 1000, now: () => 1_000_000 }),
+        );
+
+        const res = await handlers.GET(new Request(`http://localhost/api/assets?id=${assetId}`));
+        expect(res.status).toBe(503); // ★ 不是 410
+        const payload = (await res.json()) as { error?: string; reason?: string };
+        expect(payload.error).toBe('ASSET_STORE_IO_ERROR');
+        expect(payload.reason).toBe('IO_ERROR');
+
+        // reason 要可诊断，但不能泄漏内部路径（落盘目录是服务器内部结构）。
+        expect(JSON.stringify(payload)).not.toContain(brokenDir);
+        expect(JSON.stringify(payload)).not.toContain(assetId.slice(0, 8) + '.json');
+
+        // ★ 对照组：同一组 handler 在"确实不存在"时**仍然**是 410 ——
+        //   证明上一条的 503 不是因为 handler 被改坏了，而是真的在按原因分类。
+        const missing = await handlers.GET(
+          new Request('http://localhost/api/assets?id=6f1d3f10-7777-4777-8777-777777777777'),
+        );
+        expect(missing.status).toBe(410);
+        expect(((await missing.json()) as { error?: string }).error).toBe('ASSET_EXPIRED');
+      } finally {
+        await rm(brokenDir, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
 });
 
 /** 落到 `<cwd>/.tmp/assets` 的条目数（含 .json + .bin，每个资产 2 个文件）。 */
@@ -358,6 +396,13 @@ function countAssetFiles(): number {
   const dir = nodePath.resolve(process.cwd(), '.tmp/assets');
   if (!existsSync(dir)) return 0;
   return readdirSync(dir).length;
+}
+
+/** 读到才算数；读不到就把 reason 抛出来（比 `!` 非空断言更响：看得出是"过期"还是"磁盘坏了"）。 */
+async function mustGet(target: AssetStore, assetId: string): Promise<Extract<AssetLookup, { ok: true }>> {
+  const found = await target.get(assetId);
+  if (!found.ok) throw new Error(`期望读到 ${assetId}，实际 reason=${found.reason}`);
+  return found;
 }
 
 /* ================================================================== *
@@ -408,7 +453,11 @@ describe('FileAssetStore 的新边界', () => {
         await sweeper.put({ bytes: new Uint8Array([1]), name: 'x.png', mime: 'image/png' });
         clock = base + ttl + offset; // 恰好落在 expiresAt 上 / 前 1ms / 后 1ms
 
-        const alive = (await reader.get(recordA.assetId)) !== null;
+        const verdict = await reader.get(recordA.assetId);
+        // ★ 读不到时必须是"过期"，不能是"磁盘故障" ——
+        //   否则下面这条三元判决就被 I/O 噪声污染了：I/O 故障与 TTL 无关，必须分开判。
+        if (!verdict.ok) expect(verdict.reason).toBe('EXPIRED');
+        const alive = verdict.ok;
         const swept = (await sweeper.sweepExpired()) === 1;
 
         // 语义：同一时刻不该出现"能读出来但被判过期"或"判存活但已被删"。
@@ -423,14 +472,21 @@ describe('FileAssetStore 的新边界', () => {
     60_000,
   );
 
-  it('同名共存：两次 put 同名 → 两个 assetId，字节不串台', async () => {
-    const first = await store.put({ bytes: new Uint8Array([11]), name: 'dup.png', mime: 'image/png' });
-    const second = await store.put({ bytes: new Uint8Array([22]), name: 'dup.png', mime: 'image/png' });
+  it(
+    '同名共存：两次 put 同名 → 两个 assetId，字节不串台',
+    async () => {
+      const first = await store.put({ bytes: new Uint8Array([11]), name: 'dup.png', mime: 'image/png' });
+      const second = await store.put({ bytes: new Uint8Array([22]), name: 'dup.png', mime: 'image/png' });
 
-    expect(first.assetId).not.toBe(second.assetId);
-    expect([...(await store.get(first.assetId))!.bytes]).toEqual([11]); // ★ 对照组：第二次没盖掉第一次
-    expect([...(await store.get(second.assetId))!.bytes]).toEqual([22]);
-  });
+      expect(first.assetId).not.toBe(second.assetId);
+      // ★ 对照组：第二次没盖掉第一次
+      expect([...(await mustGet(store, first.assetId)).value.bytes]).toEqual([11]);
+      expect([...(await mustGet(store, second.assetId)).value.bytes]).toEqual([22]);
+    },
+    // ★ 显式超时：这条要落 4 个文件（2 资产 × json+bin），全量负载下实测 1276~1634ms，
+    //   离 vitest 默认的 5s 不算远；判决与墙钟无关，不该被墙钟砍掉。
+    60_000,
+  );
 
   it('★ 路径穿越实锤：目录外的哨兵文件读不到，也删不掉', async () => {
     const sentinelPath = nodePath.join(tmpRoot, 'secret.txt');
@@ -446,7 +502,9 @@ describe('FileAssetStore 的新边界', () => {
       './secret.txt',
     ];
     for (const id of probes) {
-      expect(await store.get(id)).toBeNull();
+      // ★ 判据比"null"强：必须是"形状守卫拒了"，不是"没找到"也不是"磁盘坏了"。
+      //   若这里是 IO_ERROR，说明落盘路径已被拼出去访问了 —— 那是穿越信号。
+      expect(await store.get(id)).toEqual({ ok: false, reason: 'MALFORMED_ID' });
     }
     expect(readFileSync(sentinelPath, 'utf8')).toBe('TOP-SECRET');
   });
@@ -470,7 +528,9 @@ describe('FileAssetStore 的新边界', () => {
     const live = await mixed.put({ bytes: new Uint8Array([1]), name: 'real.png', mime: 'image/png' });
     clock += 1001;
     expect(await mixed.sweepExpired()).toBe(1);
-    expect(await mixed.get(live.assetId)).toBeNull();
+    // ★ 已被这次 sweep 从盘上删掉 → 原因是 NOT_FOUND，不是 EXPIRED
+    //（两者在 route 上都回 410，但"被清掉了"与"当时就过期了"要如实区分）。
+    expect(await mixed.get(live.assetId)).toEqual({ ok: false, reason: 'NOT_FOUND' });
   });
 
   it('描述符来自磁盘 → 字段缺失也能读，但 expiresAt 不是数字就判无效', async () => {
@@ -484,7 +544,8 @@ describe('FileAssetStore 的新边界', () => {
       JSON.stringify({ ...record, expiresAt: 'not-a-number' }),
       'utf8',
     );
-    expect(await target.get(record.assetId)).toBeNull();
+    // ★ 这是**内容**层面的读不出 → NOT_FOUND，不是 IO_ERROR（后者会变成 5xx，那是误报）。
+    expect(await target.get(record.assetId)).toEqual({ ok: false, reason: 'NOT_FOUND' });
   });
 });
 
