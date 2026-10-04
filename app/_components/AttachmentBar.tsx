@@ -21,8 +21,15 @@ import { ATTACHMENT_MAX_COUNT } from '@/shared/plan/types';
  * 而 eject 掉它的 UI（那样这次换壳的收益就没了），而是把工具条放在聊天区上方。
  */
 export function AttachmentBar() {
-  const { attachments } = useShellConfig();
+  const { attachments, attachmentNotice, awaitingUploads } = useShellConfig();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // `attachments`（真正随提问发出去的）只含 ready 的，所以"本轮会带上几张"要说这个数，
+  // 不能说 items.length —— 后者把还在传的和失败的也算进去了，会误导。
+  const readyCount = attachments.attachments.length;
+  const notReadyCount = attachments.items.length - readyCount;
+  // 等待提示要说"正在传几张"（失败的那几张永远等不来，算进去会一直显示错误的数字）。
+  const uploadingCount = attachments.items.filter((item) => item.status === 'uploading').length;
 
   return (
     <div className="px-[var(--spacing-gutter)] pt-[var(--spacing-gap)]">
@@ -53,8 +60,16 @@ export function AttachmentBar() {
           {attachments.uploading ? '上传中…' : '+ 加图'}
         </button>
 
+        {/*
+         * 计数文案：把三件事说清楚 —— 本轮会带上几张 / 发完不清空 / 有清空入口。
+         * 原来的「N / 20」只给了个比值，用户既可能以为发完就清了，
+         * 也可能不知道下一次提问还会带上，两种误解都会造成"我以为传了/没传"的错位。
+         */}
+        <span className="text-[11px]" style={{ color: 'var(--color-text-secondary)' }}>
+          本轮提问会带上 {readyCount} 张图片，发完不自动清空（下次提问仍会带上，要移除点「清空」）
+        </span>
         <span className="text-[11px]" style={{ color: 'var(--color-text-weak)' }}>
-          {attachments.items.length} / {ATTACHMENT_MAX_COUNT} · PNG / JPEG / WebP / GIF
+          最多 {ATTACHMENT_MAX_COUNT} 张 · PNG / JPEG / WebP / GIF
         </span>
 
         {attachments.items.length > 0 ? (
@@ -68,6 +83,48 @@ export function AttachmentBar() {
           </button>
         ) : null}
       </div>
+
+      {/*
+       * ★ 在途/未就绪的醒目提示（不是弱化色的 notice）。
+       * 一旦有图片没传完，"发送会不会漏掉它们"是用户**最需要知道**的事，
+       * 弱化色会被当成装饰性说明一扫而过 —— 那等于没说。
+       * 行为由 `providers.tsx` 的 `waitForPendingUploads` 保证：发送会先等，
+       * 等不到也会在 `attachmentNotice` 里明确报数，绝不静默少发。
+       */}
+      {awaitingUploads ? (
+        <p
+          className="mt-2 rounded-[var(--radius-control)] border px-2.5 py-1.5 text-[11px]"
+          role="status"
+          aria-live="polite"
+          style={{
+            borderColor: 'var(--color-accent-soft-strong)',
+            background: 'var(--color-accent-mist)',
+            color: 'var(--color-accent-strong)',
+          }}
+        >
+          正在等 {uploadingCount} 张图片上传完成，传完后会随这次提问一起发出，请稍候…
+        </p>
+      ) : notReadyCount > 0 ? (
+        <p
+          className="mt-2 rounded-[var(--radius-control)] border px-2.5 py-1.5 text-[11px]"
+          role="status"
+          style={{
+            borderColor: 'var(--color-accent-soft-strong)',
+            background: 'var(--color-accent-mist)',
+            color: 'var(--color-accent-strong)',
+          }}
+        >
+          还有 {notReadyCount} 张尚未就绪（上传中或上传失败），现在发送会先等它们传完；
+          等不到也不会悄悄少发，会在下面明确告诉你本轮少了几张。
+        </p>
+      ) : null}
+
+      {/* 本轮的实际结果回执：真少了才出现。发完不自动清空，用户下次提问前都看得见。 */}
+      {attachmentNotice.length > 0 ? (
+        <p className="mt-2 text-[11px]" style={{ color: 'var(--color-danger)' }} role="alert">
+          {attachmentNotice}
+        </p>
+      ) : null}
 
       {/* 已选文件：缩略 + 状态 + 删除 */}
       {attachments.items.length > 0 ? (

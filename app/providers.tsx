@@ -97,6 +97,22 @@ const DEFAULT_RUN_OPTIONS: RunOptions = {
   requireConstraints: false,
 };
 
+/* ------------------------------------------------------------------ *
+ * 发送前等待在途上传（防止"上传中提交"静默丢附件）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 发送时最多等多久在途上传。
+ *
+ * 取 8 秒：一张手机照片在常规网络下远快于此，取这个值既能覆盖"用户选完图立刻回车"
+ * 这种最常见的时序，又不至于让用户在网络真的卡死时无限期看着界面没反应。
+ * 超了就**照常发送**（用户的提问不能丢），但把"本轮没带上 N 张"显式说出来。
+ */
+const UPLOAD_WAIT_TIMEOUT_MS = 8_000;
+
+/** 等待期间轮询渲染态的间隔。等的是 React 渲染结果，不是内部 promise，所以只能轮询。 */
+const UPLOAD_POLL_INTERVAL_MS = 60;
+
 /**
  * 领域默认选 travel：这是本项目投入最大的领域，写死 demo 等于永远摸不到。
  *
@@ -130,6 +146,16 @@ export interface ShellConfig {
    * 只有 Provider 这条链路够得着。
    */
   attachments: UseAttachments;
+  /**
+   * 本轮 run 的**附件回执**：发送前会等还在上传的图片传完（见 `waitForPendingUploads`），
+   * 真有没带上的（等超时 / 上传失败）时这里是一句必须被看见的话；空串表示全部带上了。
+   *
+   * 为什么单独开一个字段而不是复用 `attachments.error`：那个是"选文件阶段"的错，
+   * 这个是"发送阶段"的结果，两者生命周期不同（后者每次 run 都会重算）。
+   */
+  attachmentNotice: string;
+  /** 正在等还在上传的图片（发送被短暂推迟）；用于给用户一个可见的等待态。 */
+  awaitingUploads: boolean;
 }
 
 const ShellConfigContext = createContext<ShellConfig | null>(null);
@@ -157,6 +183,11 @@ export default function Providers({ children }: ProvidersProps): ReactNode {
   const [runOptions, setRunOptions] = useState<RunOptions>(DEFAULT_RUN_OPTIONS);
   const attachments = useAttachments();
 
+  /** 本轮 run 的附件回执（空串 = 全部带上了）。见 `ShellConfig.attachmentNotice`。 */
+  const [attachmentNotice, setAttachmentNotice] = useState<string>('');
+  /** 正在等还在上传的图片，用于给用户一个可见的等待态（否则界面看起来像卡住了）。 */
+  const [awaitingUploads, setAwaitingUploads] = useState<boolean>(false);
+
   /**
    * K9（`76b77d8`）：有附件时必须**强制关闭** `requireConstraints` —— 两者互斥
    * （引擎会在澄清处提前 return，计划根本不生成，图片流程永远走不到）。
@@ -177,8 +208,24 @@ export default function Providers({ children }: ProvidersProps): ReactNode {
     domainId: string;
     runOptions: RunOptions;
     attachments: Attachment[];
-  }>({ domainId, runOptions, attachments: attachments.attachments });
-  latestRef.current = { domainId, runOptions, attachments: attachments.attachments };
+    /** 还有图片在上传中（此时 `attachments` 是不完整的快照）。 */
+    uploading: boolean;
+    /** 列表里**不是** `ready` 的条数（上传中 + 上传失败），即"本轮带不走的数量"。 */
+    notReadyCount: number;
+  }>({
+    domainId,
+    runOptions,
+    attachments: attachments.attachments,
+    uploading: attachments.uploading,
+    notReadyCount: attachments.items.filter((item) => item.status !== 'ready').length,
+  });
+  latestRef.current = {
+    domainId,
+    runOptions,
+    attachments: attachments.attachments,
+    uploading: attachments.uploading,
+    notReadyCount: attachments.items.filter((item) => item.status !== 'ready').length,
+  };
 
   const agent = useMemo<HttpAgent>(() => {
     const instance = new HttpAgent({ url: AGUI_ENDPOINT });
@@ -244,16 +291,72 @@ export default function Providers({ children }: ProvidersProps): ReactNode {
      * ★ 已经交代过的中断绝不能再补一条 cancelled（见 `buildResumeWithCancelled` 注释）：
      *   那样会把用户刚点的选项冲掉。
      */
+    /**
+     * ★ 发送前把还在上传的图片**等完**。
+     *
+     * 要修的 bug：`attachments`（真正发出去的描述符）只取 `status === 'ready'`，
+     * 所以"选 5 张 → 3 张传完、2 张还在传 → 用户直接回车"会让那 2 张无声无息消失。
+     * 页面上有"上传中…"的缩略，但用户不会把那个缩略和"这一轮少算了 2 张图"联系起来 ——
+     * 结果就是行程规划少算 2 张图且不报任何错，正是本项目最忌讳的形态
+     * （用户以为传了，系统以为没传）。
+     *
+     * 为什么是"等"而不是"阻止发送"：run 由 `<CopilotChat>` 内部发起，
+     * 拦它的输入框就得 eject 掉它的整套 UI（换壳收益赔进去）；
+     * 而在 `runAgent` 里抛异常，CopilotKit 只会落一个 `agent_run_failed` 控制台错误、
+     * 界面毫无反应 —— 那同样是静默失败。等一等，既不丢提问也不丢附件。
+     *
+     * 轮询而不是 await 上传 promise：`attachments` 是 hook 内部的 state，
+     * 上传 promise resolve 时 React 未必已经重渲染完（ref 还是旧的），
+     * 所以这里等的是**渲染结果**（`latestRef.current.uploading`），不是内部 promise。
+     *
+     * 等超时后**照常发送**（提问不能丢），但把没带上的数量显式写进 `attachmentNotice`。
+     */
+    const waitForPendingUploads = async (): Promise<void> => {
+      if (!latestRef.current.uploading) {
+        // 快路径：没有在途上传，清掉上一轮可能留下的回执。
+        setAttachmentNotice('');
+        return;
+      }
+
+      setAwaitingUploads(true);
+      const deadline = Date.now() + UPLOAD_WAIT_TIMEOUT_MS;
+      try {
+        while (latestRef.current.uploading && Date.now() < deadline) {
+          await new Promise<void>((resolve) => setTimeout(resolve, UPLOAD_POLL_INTERVAL_MS));
+        }
+      } finally {
+        setAwaitingUploads(false);
+      }
+
+      // 走到这里要么都传完了，要么超时了 —— 两种都要给一句人话。
+      const notReady = latestRef.current.notReadyCount;
+      if (notReady <= 0) {
+        setAttachmentNotice('');
+        return;
+      }
+      setAttachmentNotice(
+        latestRef.current.uploading
+          ? `本轮没带上 ${notReady} 张图片：它们还在上传（已等 ${UPLOAD_WAIT_TIMEOUT_MS / 1000} 秒）。这些图仍留在上面的列表里，等传完后再问一次就会带上。`
+          : `本轮没带上 ${notReady} 张图片：上传失败。它们仍留在上面的列表里并已标红，删掉重传或先不带它们提问都可以。`,
+      );
+    };
+
     const baseRunAgent = instance.runAgent.bind(instance);
     instance.runAgent = (parameters, subscriber) => {
       const resume = buildResumeWithCancelled(
         instance.pendingInterrupts ?? [],
         parameters?.resume,
       );
-      return baseRunAgent(
-        resume === undefined ? parameters : { ...parameters, resume: [...resume] },
-        subscriber,
-      );
+      const prepared = resume === undefined ? parameters : { ...parameters, resume: [...resume] };
+
+      // 快路径（没有在途上传）保持完全同步，不改变 `runAgent` 的既有时序；
+      // 只有在真的有图片在传时才进入异步等待分支。
+      if (!latestRef.current.uploading) {
+        setAttachmentNotice('');
+        return baseRunAgent(prepared, subscriber);
+      }
+
+      return waitForPendingUploads().then(() => baseRunAgent(prepared, subscriber));
     };
 
     return instance;
@@ -283,8 +386,10 @@ export default function Providers({ children }: ProvidersProps): ReactNode {
       setRunOptions: (patch: Partial<RunOptions>): void =>
         setRunOptions((prev) => ({ ...prev, ...patch })),
       attachments,
+      attachmentNotice,
+      awaitingUploads,
     }),
-    [domainId, runOptions, attachments],
+    [domainId, runOptions, attachments, attachmentNotice, awaitingUploads],
   );
 
   return (
