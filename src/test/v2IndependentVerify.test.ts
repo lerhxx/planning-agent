@@ -377,38 +377,51 @@ describe('FileAssetStore 的新边界', () => {
     await rm(tmpRoot, { recursive: true, force: true });
   });
 
-  it('★ TTL 边界：get 与 sweepExpired 在**同一刻**必须给出同一判决', async () => {
-    const ttl = 1000;
-    const base = 5_000_000;
+  /**
+   * ★ 显式给超时（与同文件 :300 / :318 的 60s 一致），不要依赖 vitest 默认的 5s。
+   *
+   * 为什么：这条用例是**纯 I/O 密集**的 —— 3 个 offset × 2 个实例 ≈ 45 次
+   * `mkdir / readdir / readFile / writeFile`。实测同一条用例：
+   *   单跑 442ms → 整文件跑 451ms → 全量跑 2518~2842ms → 机器更慢时 >5000ms 被判超时。
+   * 而它的判决**完全由注入时钟决定**（`now: () => clock`），墙钟耗时与结论无关：
+   * 用 5s 去砍它，等于让"机器今天卡不卡"来决定"TTL 语义对不对"，这是假红。
+   */
+  it(
+    '★ TTL 边界：get 与 sweepExpired 在**同一刻**必须给出同一判决',
+    async () => {
+      const ttl = 1000;
+      const base = 5_000_000;
 
-    for (const offset of [-1, 0, 1]) {
-      let clock = base;
-      const makeProbe = (label: string): AssetStore =>
-        createFileAssetStore(nodePath.join(tmpRoot, `ttl-${offset}-${label}`), {
-          ttlMs: ttl,
-          now: () => clock,
+      for (const offset of [-1, 0, 1]) {
+        let clock = base;
+        const makeProbe = (label: string): AssetStore =>
+          createFileAssetStore(nodePath.join(tmpRoot, `ttl-${offset}-${label}`), {
+            ttlMs: ttl,
+            now: () => clock,
+          });
+
+        // ★ get 与 sweep 必须各用一份独立实例：真实实现里 `get` 命中过期会**顺手删掉**
+        // （store.ts:168-171），同一实例上连续调用会让第二眼永远看不见东西。
+        const reader = makeProbe('read');
+        const sweeper = makeProbe('sweep');
+        const recordA = await reader.put({ bytes: new Uint8Array([1]), name: 'x.png', mime: 'image/png' });
+        await sweeper.put({ bytes: new Uint8Array([1]), name: 'x.png', mime: 'image/png' });
+        clock = base + ttl + offset; // 恰好落在 expiresAt 上 / 前 1ms / 后 1ms
+
+        const alive = (await reader.get(recordA.assetId)) !== null;
+        const swept = (await sweeper.sweepExpired()) === 1;
+
+        // 语义：同一时刻不该出现"能读出来但被判过期"或"判存活但已被删"。
+        // 否则用户看到的是随 sweep 时机漂移的 ASSET_EXPIRED，不可重现。
+        expect({ offset, alive, expired: swept }).toEqual({
+          offset,
+          alive: offset <= -1,
+          expired: offset >= 0,
         });
-
-      // ★ get 与 sweep 必须各用一份独立实例：真实实现里 `get` 命中过期会**顺手删掉**
-      // （store.ts:168-171），同一实例上连续调用会让第二眼永远看不见东西。
-      const reader = makeProbe('read');
-      const sweeper = makeProbe('sweep');
-      const recordA = await reader.put({ bytes: new Uint8Array([1]), name: 'x.png', mime: 'image/png' });
-      await sweeper.put({ bytes: new Uint8Array([1]), name: 'x.png', mime: 'image/png' });
-      clock = base + ttl + offset; // 恰好落在 expiresAt 上 / 前 1ms / 后 1ms
-
-      const alive = (await reader.get(recordA.assetId)) !== null;
-      const swept = (await sweeper.sweepExpired()) === 1;
-
-      // 语义：同一时刻不该出现"能读出来但被判过期"或"判存活但已被删"。
-      // 否则用户看到的是随 sweep 时机漂移的 ASSET_EXPIRED，不可重现。
-      expect({ offset, alive, expired: swept }).toEqual({
-        offset,
-        alive: offset <= -1,
-        expired: offset >= 0,
-      });
-    }
-  });
+      }
+    },
+    60_000,
+  );
 
   it('同名共存：两次 put 同名 → 两个 assetId，字节不串台', async () => {
     const first = await store.put({ bytes: new Uint8Array([11]), name: 'dup.png', mime: 'image/png' });
