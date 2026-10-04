@@ -44,6 +44,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -59,6 +60,8 @@ import {
 import { domainOptions, registerAllUI } from '@/src/domains/ui';
 import { TRAVEL_DOMAIN_ID } from '@/src/domains/travel/meta';
 import { buildResumeWithCancelled } from '@/src/agui/resume';
+import { useAttachments, type UseAttachments } from '@/src/features/attachment/useAttachments';
+import type { Attachment } from '@/shared/plan/types';
 
 /**
  * 保留旧页面的启动注册：生成式组件**按名字**在注册表里查找（`ComponentRenderer`），
@@ -119,6 +122,14 @@ export interface ShellConfig {
   setDomainId: (domainId: string) => void;
   runOptions: RunOptions;
   setRunOptions: (patch: Partial<RunOptions>) => void;
+  /**
+   * 附件草稿（上传态 + 就绪描述符）。
+   *
+   * 放在外壳层 Provider 里而不是页面里，是因为**中间件需要读它**：附件要随下一次
+   * 提问经 `forwardedProps.attachments` 发出去，而 run 由 `<CopilotChat>` 内部发起，
+   * 只有 Provider 这条链路够得着。
+   */
+  attachments: UseAttachments;
 }
 
 const ShellConfigContext = createContext<ShellConfig | null>(null);
@@ -144,16 +155,30 @@ export interface ProvidersProps {
 export default function Providers({ children }: ProvidersProps): ReactNode {
   const [domainId, setDomainId] = useState<string>(DEFAULT_DOMAIN_ID);
   const [runOptions, setRunOptions] = useState<RunOptions>(DEFAULT_RUN_OPTIONS);
+  const attachments = useAttachments();
 
   /**
-   * 中间件每次 run 都要读**最新**的领域与开关值，但 `useMemo(…, [])` 里的
+   * K9（`76b77d8`）：有附件时必须**强制关闭** `requireConstraints` —— 两者互斥
+   * （引擎会在澄清处提前 return，计划根本不生成，图片流程永远走不到）。
+   * 服务端 `/api/agui` 已兜底强制，这里同步把 UI 状态也拉回 false，
+   * 否则界面上会出现"勾着但被禁用"这种说不清的状态。中间件里还有一道覆盖。
+   */
+  useEffect(() => {
+    if (attachments.items.length > 0 && runOptions.requireConstraints) {
+      setRunOptions((prev) => ({ ...prev, requireConstraints: false }));
+    }
+  }, [attachments.items.length, runOptions.requireConstraints]);
+
+  /**
+   * 中间件每次 run 都要读**最新**的领域、开关与附件，但 `useMemo(…, [])` 里的
    * agent 只构造一次 —— 所以用一个 ref 桥接，避免闭包吃到构造时的旧值。
    */
-  const latestRef = useRef<{ domainId: string; runOptions: RunOptions }>({
-    domainId,
-    runOptions,
-  });
-  latestRef.current = { domainId, runOptions };
+  const latestRef = useRef<{
+    domainId: string;
+    runOptions: RunOptions;
+    attachments: Attachment[];
+  }>({ domainId, runOptions, attachments: attachments.attachments });
+  latestRef.current = { domainId, runOptions, attachments: attachments.attachments };
 
   const agent = useMemo<HttpAgent>(() => {
     const instance = new HttpAgent({ url: AGUI_ENDPOINT });
@@ -171,13 +196,27 @@ export default function Providers({ children }: ProvidersProps): ReactNode {
      * 都读（state 先，forwardedProps 后覆盖），`domainId` 走 state 是跟服务端约定好的通道，
      * 开关走 forwardedProps 语义更准（它们不是会话状态，是本次 run 的指令）。
      */
-    instance.use((input: RunAgentInput, next: AbstractAgent) =>
-      next.run({
+    instance.use((input: RunAgentInput, next: AbstractAgent) => {
+      const { domainId, runOptions, attachments: files } = latestRef.current;
+      const hasAttachments = files.length > 0;
+
+      return next.run({
         ...input,
-        state: { ...input.state, domainId: latestRef.current.domainId },
-        forwardedProps: { ...input.forwardedProps, ...latestRef.current.runOptions },
-      }),
-    );
+        state: { ...input.state, domainId },
+        /*
+         * `forwardedProps` 装的是"本次 run 的指令"：运行期开关 + 附件。
+         * - 附件走 `attachments`（`Attachment[]` 描述符，字节不进请求体，走 `/api/assets`）；
+         * - K9：有附件时 `requireConstraints` 强制 false（与图片流程互斥），
+         *   服务端也强制，这里是 client 侧同源的第二道；
+         * - 没附件时**不写** `attachments` 键，避免发一个空数组去干扰服务端解析。
+         */
+        forwardedProps: {
+          ...input.forwardedProps,
+          ...runOptions,
+          ...(hasAttachments ? { requireConstraints: false, attachments: files } : {}),
+        },
+      });
+    });
 
     /*
      * ★ 补齐未交代的 pending interrupt —— 一个真实的阻断性 bug 的修法。
@@ -243,8 +282,9 @@ export default function Providers({ children }: ProvidersProps): ReactNode {
       runOptions,
       setRunOptions: (patch: Partial<RunOptions>): void =>
         setRunOptions((prev) => ({ ...prev, ...patch })),
+      attachments,
     }),
-    [domainId, runOptions],
+    [domainId, runOptions, attachments],
   );
 
   return (

@@ -15,7 +15,7 @@
  * 所以二者都天然排在正文上方 —— 这里唯一要做的就是**别用 CSS（order / row-reverse /
  * absolute 定位）把活动卡片挤到正文下面**。
  */
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useState, type DragEvent } from 'react';
 import type { Message } from '@ag-ui/core';
 import { CopilotChat, useAgent, UseAgentUpdate } from '@copilotkit/react-core/v2';
 import type { CopilotChatLabels } from '@copilotkit/react-core/v2';
@@ -23,8 +23,9 @@ import ThreadSidebar from './_components/ThreadSidebar';
 import QuestionHistoryChips from './_components/QuestionHistoryChips';
 import DomainSelector from './_components/DomainSelector';
 import RunOptionsPanel from './_components/RunOptionsPanel';
+import AttachmentBar from './_components/AttachmentBar';
 import { useLocalThreads } from './_lib/useLocalThreads';
-import { DEFAULT_AGENT_ID } from './providers';
+import { DEFAULT_AGENT_ID, useShellConfig } from './providers';
 
 /**
  * `CopilotChatDefaultLabels` 的键名有一套自己的命名（不是 `inputPlaceholder` /
@@ -73,6 +74,28 @@ function extractUserQuestions(messages: Message[]): string[] {
 
 export default function Page() {
   const { threads, activeThreadId, createThread, selectThread, touchThread } = useLocalThreads();
+  const { attachments } = useShellConfig();
+
+  /**
+   * 拖拽上传：整个主区都是投放区（比只在一条窄工具条上好用）。
+   *
+   * ★ 依旧**不在 UI 层过滤**：把用户拖进来的每一个文件都交给 `useAttachments()`，
+   * 由它统一分区并把"被忽略的 N 个非图片文件"点名说出来。
+   */
+  const [dragOver, setDragOver] = useState<boolean>(false);
+  const onDragOver = (event: DragEvent<HTMLElement>): void => {
+    event.preventDefault();
+    setDragOver(true);
+  };
+  const onDragLeave = (event: DragEvent<HTMLElement>): void => {
+    event.preventDefault();
+    setDragOver(false);
+  };
+  const onDrop = (event: DragEvent<HTMLElement>): void => {
+    event.preventDefault();
+    setDragOver(false);
+    void attachments.add(Array.from(event.dataTransfer?.files ?? []));
+  };
 
   /**
    * `useAgent` 默认不订阅任何更新 —— 不传 `updates` 拿到的 `agent` 不会随消息变化触发重渲染。
@@ -129,7 +152,24 @@ export default function Page() {
         onSelectThread={handleSelectThread}
       />
 
-      <main className="flex min-w-0 flex-1 flex-col bg-[var(--color-surface)]">
+      <main
+        className={`relative flex min-w-0 flex-1 flex-col bg-[var(--color-surface)] ${
+          dragOver ? 'ring-2 ring-[var(--color-accent)] ring-inset' : ''
+        }`}
+        onDragOver={onDragOver}
+        onDragLeave={onDragLeave}
+        onDrop={onDrop}
+      >
+        {/* 拖拽悬停时的投放提示：不给它 pointer-events，免得抢走 drop 事件。 */}
+        {dragOver ? (
+          <div
+            className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center text-sm"
+            style={{ background: 'rgba(244, 248, 255, 0.75)', color: 'var(--color-accent-strong)' }}
+          >
+            松手即可添加图片
+          </div>
+        ) : null}
+
         {/*
          * 顶部工具条：左边是本轮的用户问题 chips（hover 出全文），
          * 右边是领域选择器 + 运行参数（故障注入/重排）。
@@ -145,6 +185,13 @@ export default function Page() {
             <RunOptionsPanel />
           </div>
         </div>
+
+        {/*
+         * 附件工具条：加图 / 缩略 / 删除 / 错误与提示。
+         * 放在聊天区**上方**而不是塞进输入框 —— `<CopilotChat>` 自带输入框不接受外部
+         * 注入按钮，为了挂个按钮而 eject 掉它的整套 UI 会把换壳收益赔进去。
+         */}
+        <AttachmentBar />
 
         <div className="min-h-0 flex-1 px-[var(--spacing-gutter)] pb-[var(--spacing-gutter)] pt-[var(--spacing-gap)]">
           <div className="h-full overflow-hidden rounded-[var(--radius-card)] bg-[var(--color-card)] shadow-[var(--shadow-card)]">

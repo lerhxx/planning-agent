@@ -35,9 +35,17 @@ function isDefault(options: RunOptions): boolean {
 }
 
 export function RunOptionsPanel() {
-  const { runOptions, setRunOptions } = useShellConfig();
+  const { runOptions, setRunOptions, attachments } = useShellConfig();
   const [open, setOpen] = useState<boolean>(false);
   const dirty = !isDefault(runOptions);
+
+  /**
+   * K9（`76b77d8`）：有附件时必须关掉"强制先澄清约束" —— 两者互斥，
+   * 引擎会在澄清处提前 return，计划根本不生成，图片流程永远走不到。
+   * 服务端已兜底强制，Provider 里也会把状态拉回 false；这里禁用 + 说明原因，
+   * 让用户知道**为什么**勾不上，而不是看到一个莫名其妙的灰控件。
+   */
+  const hasAttachments = attachments.items.length > 0;
 
   return (
     <div className="relative">
@@ -97,15 +105,36 @@ export function RunOptionsPanel() {
             ))}
           </OptionRow>
 
-          <label className="mt-3 flex cursor-pointer items-center gap-2 text-xs">
+          <label
+            className={`mt-3 flex items-center gap-2 text-xs ${
+              hasAttachments ? 'cursor-not-allowed' : 'cursor-pointer'
+            }`}
+          >
             <input
               type="checkbox"
               checked={runOptions.requireConstraints}
+              disabled={hasAttachments}
               onChange={(event) => setRunOptions({ requireConstraints: event.target.checked })}
-              className="h-3.5 w-3.5 cursor-pointer accent-[var(--color-accent)]"
+              className={`h-3.5 w-3.5 accent-[var(--color-accent)] ${
+                hasAttachments ? 'cursor-not-allowed' : 'cursor-pointer'
+              }`}
             />
-            <span style={{ color: 'var(--color-text-secondary)' }}>强制先澄清约束</span>
+            <span
+              style={{
+                color: hasAttachments
+                  ? 'var(--color-text-weak)'
+                  : 'var(--color-text-secondary)',
+              }}
+            >
+              强制先澄清约束
+            </span>
           </label>
+
+          {hasAttachments ? (
+            <p className="mt-1 text-[11px] leading-relaxed" style={{ color: 'var(--color-text-weak)' }}>
+              已有附件时强制关闭：澄清与图片流程互斥，开了会让计划根本不生成。
+            </p>
+          ) : null}
 
           <p className="mt-3 text-[11px] leading-relaxed" style={{ color: 'var(--color-text-weak)' }}>
             这些开关随下一次提问一起发给 <code>/api/agui</code>（forwardedProps），
