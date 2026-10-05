@@ -7,7 +7,7 @@
 import type { StreamEvent } from '@/shared/stream/events';
 import { zRunRequest } from '@/shared/run/types';
 import { runGoal } from '@/src/core/run/engine';
-import { createMockRuntime } from '@/src/core/runtime/mock';
+import { createRuntime } from '@/src/core/runtime/factory';
 // 领域包的**服务端唯一引用点**：桶文件，新增领域只改 src/domains/index.ts。
 import { registerAllDomains } from '@/src/domains';
 
@@ -33,6 +33,15 @@ export async function POST(request: Request): Promise<Response> {
 
   const input = parsed.data;
   const encoder = new TextEncoder();
+
+  /*
+   * v3：显式要求走真模型（默认仍是 mock）。
+   *
+   * ★ 刻意**不**把它加进 `zRunRequest` —— 那是 `shared/**` 的公开契约，
+   *   为了一个调试开关去扩共享契约，会让所有既有调用方与测试都受影响，
+   *   远大于收益。这里只做一次窄读取，且必须严格等于 `true` 才算开启。
+   */
+  const preferReal = (body as { realModel?: unknown } | null)?.realModel === true;
 
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
@@ -61,7 +70,15 @@ export async function POST(request: Request): Promise<Response> {
             edit: input.edit ?? null,
           },
           {
-            runtime: createMockRuntime({ latencyMs: 120, replanMode: input.replanMode }),
+            /*
+             * v3：runtime 由工厂按显式开关选择（默认仍是 MockRuntime）。
+             * 缺模型配置时 `createRuntime` 会抛错，不会悄悄退回 mock。
+             */
+            runtime: createRuntime({
+              preferReal,
+              mockLatencyMs: 120,
+              mockReplanMode: input.replanMode,
+            }),
             emit,
             sleep,
             signal: request.signal,

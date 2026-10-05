@@ -17,7 +17,7 @@ import { EventEncoder } from '@ag-ui/encoder';
 import { z } from 'zod';
 import type { StreamEvent } from '@/shared/stream/events';
 import { runGoal } from '@/src/core/run/engine';
-import { createMockRuntime } from '@/src/core/runtime/mock';
+import { createRuntime } from '@/src/core/runtime/factory';
 import { registerAllDomains } from '@/src/domains';
 import { resolveDomainId } from '@/src/agui/domain';
 import { createTranslator, mergeResumeAnswers } from '@/src/agui/translate';
@@ -35,6 +35,14 @@ const zRunOptionsSource = z.object({
   simulate: z.enum(['none', 'retryable', 'fatal', 'clarify']).optional(),
   replanMode: z.enum(['diverge', 'stagnant']).optional(),
   requireConstraints: z.boolean().optional(),
+  /**
+   * ★ 显式要求走真模型（v3 新增）。缺省 false —— 默认仍是 mock。
+   *
+   * 传 true 但服务端没配模型环境变量时，`createRuntime` 会**抛错**，
+   * 由本路由的 catch 转成 `RUN_ERROR`。这是刻意的：
+   * 悄悄退回脚本数据、让用户以为在跑真模型，是欺骗性降级（见 runtime/factory.ts）。
+   */
+  realModel: z.boolean().optional(),
 });
 
 const zRunOptions = z.object({
@@ -42,6 +50,7 @@ const zRunOptions = z.object({
   simulate: z.enum(['none', 'retryable', 'fatal', 'clarify']).default('none'),
   replanMode: z.enum(['diverge', 'stagnant']).default('diverge'),
   requireConstraints: z.boolean().default(false),
+  realModel: z.boolean().default(false),
 });
 
 type RunOptions = z.infer<typeof zRunOptions>;
@@ -211,7 +220,16 @@ export async function POST(request: Request): Promise<Response> {
             ...(attachments === undefined ? {} : { attachments }),
           },
           {
-            runtime: createMockRuntime({ latencyMs: 120, replanMode: options.replanMode }),
+            /*
+             * v3：runtime 由工厂按显式开关选择（默认仍是 MockRuntime）。
+             * 缺模型配置时 `createRuntime` 会抛，由下面的 catch 转成 RUN_ERROR ——
+             * 不存在"悄悄退回 mock"的路径。
+             */
+            runtime: createRuntime({
+              preferReal: options.realModel,
+              mockLatencyMs: 120,
+              mockReplanMode: options.replanMode,
+            }),
             emit,
             sleep,
             signal: request.signal,
