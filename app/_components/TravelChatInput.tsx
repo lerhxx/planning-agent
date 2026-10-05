@@ -26,9 +26,10 @@
  *    我们的壳层一律用 `app/theme.tokens.css` 里的 `--color-*` / `--radius-*` 令牌。
  */
 
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { CopilotChatInput, type CopilotChatInputProps } from '@copilotkit/react-core/v2';
 import { useShellConfig } from '@/app/providers';
+import type { AttachmentDraft } from '@/src/features/attachment/useAttachments';
 
 /**
  * 点击"智能解析"时填入输入框的提示语。
@@ -62,6 +63,113 @@ function UploadIcon(): React.ReactNode {
   );
 }
 
+/** 加载指示器（用于上传中的预览覆盖层与上传按钮）。 */
+function Spinner({ className = '' }: { className?: string }): React.ReactNode {
+  return (
+    <svg
+      className={`animate-spin ${className}`}
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      aria-hidden="true"
+    >
+      <circle
+        className="opacity-25"
+        cx="12"
+        cy="12"
+        r="10"
+        stroke="currentColor"
+        strokeWidth="4"
+      />
+      <path
+        className="opacity-75"
+        fill="currentColor"
+        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+      />
+    </svg>
+  );
+}
+
+/** 把服务端 `asset://<id>` ref 还原成浏览器可加载的同源 URL（`<img>` 兜底）。 */
+function assetRefToSrc(ref: string | undefined): string | undefined {
+  if (!ref) return undefined;
+  if (ref.startsWith('asset://')) {
+    return `/api/assets?id=${encodeURIComponent(ref.slice('asset://'.length))}`;
+  }
+  return ref;
+}
+
+/** 单张附件预览：上传中显示 loading 遮罩，hover 显示删除按钮。 */
+function AttachmentPreview({
+  item,
+  onRemove,
+}: {
+  item: AttachmentDraft;
+  onRemove: (id: string) => void;
+}): React.ReactNode {
+  // 优先本地 blob（上传中 / ready 都可用）；blob 缺失时回退到服务端可加载 URL。
+  const src = item.previewUrl ?? assetRefToSrc(item.ref);
+  const isUploading = item.status === 'uploading';
+  const isError = item.status === 'error';
+  const [imgFailed, setImgFailed] = useState(!src);
+
+  return (
+    <div
+      className="group relative h-14 w-14 overflow-hidden rounded-[var(--radius-control)] border"
+      style={{
+        borderColor: isError ? 'var(--color-danger)' : 'var(--color-border)',
+        background: 'var(--color-fill-soft)',
+      }}
+      title={isError ? `上传失败：${item.error ?? ''}` : item.name}
+    >
+      {src && !imgFailed ? (
+        <img
+          src={src}
+          alt={item.name}
+          className="h-full w-full object-cover"
+          draggable={false}
+          onError={() => setImgFailed(true)}
+        />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center px-1 text-center text-[10px]"
+          style={{ color: 'var(--color-text-weak)' }}
+        >
+          <span className="line-clamp-2">{item.name}</span>
+        </div>
+      )}
+
+      {isUploading ? (
+        <div
+          className="absolute inset-0 flex items-center justify-center"
+          style={{ background: 'rgba(255,255,255,0.72)' }}
+        >
+          <Spinner className="text-[var(--color-accent-strong)]" />
+        </div>
+      ) : null}
+
+      {isError ? (
+        <div
+          className="absolute inset-0 flex items-center justify-center px-1 text-center text-[10px] font-medium"
+          style={{ background: 'rgba(255,255,255,0.82)', color: 'var(--color-danger)' }}
+        >
+          失败
+        </div>
+      ) : null}
+
+      <button
+        type="button"
+        onClick={() => onRemove(item.id)}
+        aria-label={`移除 ${item.name}`}
+        className="absolute right-0.5 top-0.5 flex h-5 w-5 cursor-pointer items-center justify-center rounded-full text-xs opacity-0 transition-opacity group-hover:opacity-100"
+        style={{ background: 'rgba(0,0,0,0.5)', color: '#fff' }}
+      >
+        ×
+      </button>
+    </div>
+  );
+}
+
 /**
  * 自定义聊天输入框：顶部一行文本区，底部一行「左 智能解析 / 右 上传 + 发送」，
  * 胶囊下方是 disclaimer。
@@ -81,7 +189,16 @@ export function TravelChatInput(props: CopilotChatInputProps): React.ReactNode {
           className="flex flex-col rounded-[var(--radius-card)] border px-3 py-2 shadow-[var(--shadow-float)]"
           style={{ borderColor: 'var(--color-border)', background: 'var(--color-card)' }}
         >
-          {/* 第一行：文本输入区（SDK 自带 textarea，不覆盖其 className）。 */}
+          {/* 顶部：附件预览（参考 DeepSeek 输入框，缩略图放在胶囊内上方）。 */}
+          {attachments.items.length > 0 ? (
+            <div className="flex flex-wrap gap-2 pb-2">
+              {attachments.items.map((item) => (
+                <AttachmentPreview key={item.id} item={item} onRemove={attachments.remove} />
+              ))}
+            </div>
+          ) : null}
+
+          {/* 文本输入区（SDK 自带 textarea，不覆盖其 className）。 */}
           <div className="min-w-0 flex-1 py-1">{args.textArea}</div>
 
           {/* 第二行：左「智能解析」工具按钮；右「上传图片 + 发送」。 */}
@@ -128,7 +245,7 @@ export function TravelChatInput(props: CopilotChatInputProps): React.ReactNode {
                 style={{ borderColor: 'var(--color-border)', background: 'var(--color-card)' }}
               >
                 {attachments.uploading ? (
-                  <span className="text-[11px]">上传中…</span>
+                  <Spinner className="text-[var(--color-accent-strong)]" />
                 ) : (
                   <UploadIcon />
                 )}

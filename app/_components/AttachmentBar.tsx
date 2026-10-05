@@ -4,10 +4,10 @@ import { useShellConfig } from '@/app/providers';
 import { ATTACHMENT_MAX_COUNT } from '@/shared/plan/types';
 
 /**
- * 附件状态条（聊天区上方，紧凑一行）—— 只展示状态，**不再承载上传控件**。
+ * 附件状态条（聊天区上方，紧凑一行）—— 只展示状态，**不再承载上传控件与缩略图**。
  *
- * 上传入口已搬到输入框胶囊里的「上传图片」按钮（见 `TravelChatInput.tsx`），
- * 这里降级为纯粹的"附件状态条"：缩略 / 计数 / 清空 / 在途等待 / 发送回执 / 错误 / 提示。
+ * 上传入口与缩略图预览已搬到输入框胶囊里（见 `TravelChatInput.tsx`），
+ * 这里降级为纯粹的"附件状态条"：计数 / 清空 / 在途等待 / 发送回执 / 错误 / 提示。
  *
  * ★ 两条从旧页面继承下来的纪律，改动前先看懂：
  *
@@ -35,7 +35,7 @@ export function AttachmentBar(): React.ReactNode {
   const uploadingCount = attachments.items.filter((item) => item.status === 'uploading').length;
 
   /*
-   * 是否还有任何东西值得展示：有缩略 / 有计数（items 非空）/ 有回执 / 有错误 / 有提示 /
+   * 是否还有任何东西值得展示：有计数（items 非空）/ 有回执 / 有错误 / 有提示 /
    * 正在等上传 / 还有没就绪的。全都没有才整条消失。
    */
   const hasContent =
@@ -115,43 +115,6 @@ export function AttachmentBar(): React.ReactNode {
         <p className="mt-2 text-[11px]" style={{ color: 'var(--color-danger)' }} role="alert">
           {attachmentNotice}
         </p>
-      ) : null}
-
-      {/* 已选文件：缩略 + 状态 + 删除 */}
-      {attachments.items.length > 0 ? (
-        <ul className="mt-2 flex flex-wrap gap-2">
-          {attachments.items.map((item) => (
-            <li key={item.id}>
-              <span
-                className="flex items-center gap-1.5 rounded-[var(--radius-control)] border px-2 py-1 text-[11px]"
-                style={{
-                  borderColor:
-                    item.status === 'error' ? 'var(--color-danger)' : 'var(--color-border)',
-                  color:
-                    item.status === 'error'
-                      ? 'var(--color-danger)'
-                      : item.status === 'uploading'
-                        ? 'var(--color-text-weak)'
-                        : 'var(--color-text-secondary)',
-                  background: 'var(--color-card)',
-                }}
-              >
-                <span className="max-w-[160px] truncate">{item.name}</span>
-                {item.status === 'uploading' ? <span>上传中…</span> : null}
-                {item.status === 'error' ? <span>失败：{item.error}</span> : null}
-                <button
-                  type="button"
-                  onClick={() => attachments.remove(item.id)}
-                  aria-label={`移除 ${item.name}`}
-                  className="cursor-pointer"
-                  style={{ color: 'var(--color-text-weak)' }}
-                >
-                  ×
-                </button>
-              </span>
-            </li>
-          ))}
-        </ul>
       ) : null}
 
       {/* 硬失败：超限 / 上传失败 / 一个图片都没剩下 */}

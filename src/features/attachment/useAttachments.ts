@@ -13,7 +13,7 @@
  *
  * 位于 `src/features/**`（L-B）：不得出现任何领域词。
  */
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ATTACHMENT_MAX_COUNT, type Attachment } from '@/shared/plan/types';
 import { makeTempAttachmentId, describeIgnoredFiles, partitionFiles, uploadAssets } from './uploadAssets';
 
@@ -23,6 +23,8 @@ export interface AttachmentDraft extends Attachment {
   status: AttachmentDraftStatus;
   /** 单条失败原因（显式展示，不静默丢弃）。 */
   error?: string;
+  /** 本地预览地址（上传完成前用 blob URL，完成后由 `ref` 取代）。 */
+  previewUrl?: string;
 }
 
 export interface UseAttachments {
@@ -43,6 +45,17 @@ export function useAttachments(): UseAttachments {
   const [items, setItems] = useState<AttachmentDraft[]>([]);
   const [error, setError] = useState<string>('');
   const [notice, setNotice] = useState<string>('');
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+
+  // 卸载时兜底释放所有本地预览 URL，避免 blob 内存泄漏。
+  useEffect(() => {
+    return () => {
+      itemsRef.current.forEach((item) => {
+        if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+      });
+    };
+  }, []);
 
   const add = useCallback(async (files: readonly File[]): Promise<void> => {
     if (files.length === 0) return;
@@ -68,11 +81,15 @@ export function useAttachments(): UseAttachments {
       mimeType: file.type || undefined,
       byteSize: file.size,
       status: 'uploading',
+      previewUrl: typeof URL !== 'undefined' && 'createObjectURL' in URL ? URL.createObjectURL(file) : undefined,
     }));
 
     // 重名共存：不去重、不改名，全量插入。上限在下一行统一判。
     const merged = [...items, ...drafts];
     if (merged.length > ATTACHMENT_MAX_COUNT) {
+      drafts.forEach((draft) => {
+        if (draft.previewUrl) URL.revokeObjectURL(draft.previewUrl);
+      });
       setError(
         `一次最多上传 ${ATTACHMENT_MAX_COUNT} 个附件，现在有 ${merged.length} 个，请先删掉一些再发。`,
       );
@@ -101,22 +118,32 @@ export function useAttachments(): UseAttachments {
     setItems((previous) =>
       previous.map((item) => {
         const asset = replacements.get(item.id);
-        return asset ? { ...asset, status: 'ready' } : item;
+        if (!asset) return item;
+        // ★ 保留本地 blob 作为预览：服务端的 `ref` 是 `asset://` 协议，浏览器
+        // 无法当 `<img>` src 直接渲染，所以 ready 后仍用 blob 显示，直到被移除/清空/卸载。
+        return { ...asset, status: 'ready', previewUrl: item.previewUrl };
       }),
     );
   }, [items]);
 
   const remove = useCallback((id: string): void => {
-    setItems((previous) => previous.filter((item) => item.id !== id));
+    setItems((previous) => {
+      const target = previous.find((item) => item.id === id);
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl);
+      return previous.filter((item) => item.id !== id);
+    });
     setError('');
     setNotice('');
   }, []);
 
   const clear = useCallback((): void => {
+    items.forEach((item) => {
+      if (item.previewUrl) URL.revokeObjectURL(item.previewUrl);
+    });
     setItems([]);
     setError('');
     setNotice('');
-  }, []);
+  }, [items]);
 
   const attachments = useMemo<Attachment[]>(
     () =>
