@@ -163,10 +163,23 @@ export async function POST(request: Request): Promise<Response> {
     async start(controller) {
       let closed = false;
       let terminalSent = false;
+      let errored = false;
 
       const writeEvent = (event: AguiEvent): void => {
         if (closed) return;
-        if (event.type === EventType.RUN_FINISHED && terminalSent) return;
+        /*
+         * ★ 终态事件互斥：RUN_FINISHED 与 RUN_ERROR 都是 run 的终态，
+         *   发过其一后就不再发另一个。否则 AG-UI 客户端会抛
+         *   "Cannot send event type 'RUN_FINISHED': The run has already errored"
+         *   （本地实测：真模型调用失败时先发 RUN_ERROR 再发 RUN_FINISHED 必炸）。
+         *   这道守卫让任何路径都不可能错位发送终态事件。
+         */
+        if (
+          (event.type === EventType.RUN_FINISHED || event.type === EventType.RUN_ERROR) &&
+          (terminalSent || errored)
+        ) {
+          return;
+        }
 
         let chunk: Uint8Array;
         try {
@@ -179,6 +192,7 @@ export async function POST(request: Request): Promise<Response> {
         try {
           controller.enqueue(chunk);
           if (event.type === EventType.RUN_FINISHED) terminalSent = true;
+          if (event.type === EventType.RUN_ERROR) errored = true;
         } catch {
           // Enqueue only fails after the client/stream has closed. The request
           // signal stops the kernel; further transport writes are intentionally ignored.
@@ -238,13 +252,19 @@ export async function POST(request: Request): Promise<Response> {
         finishRun();
       } catch (error) {
         console.error('AG-UI run failed', error);
-        if (!terminalSent) {
+        if (!terminalSent && !errored) {
+          /*
+           * ★ RUN_ERROR 是终态事件，AG-UI 协议禁止在其之后再发 RUN_FINISHED。
+           *   这里只发 RUN_ERROR，绝不再调 finishRun() —— 否则客户端会抛
+           *   "Cannot send event type 'RUN_FINISHED': The run has already errored"。
+           *   （此前默认走 mock 永不进此分支，故潜伏至今；真模型调用失败后
+           *   第一次走到这里才暴露。）
+           */
           writeEvent({
             type: EventType.RUN_ERROR,
             message: error instanceof Error ? error.message : '内部错误',
             code: 'INTERNAL_ERROR',
           });
-          finishRun();
         }
       }
 
