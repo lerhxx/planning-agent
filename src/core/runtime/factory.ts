@@ -6,10 +6,16 @@
  *   会让"这一轮结果是模型想的还是脚本想的"变得不可知 —— **那比直接失败更糟**。
  *   真模型失败时用户该看到明确的错误并重试，而不是一个来源不明的结果。
  *
- * ★ 选择优先级（显式 > 环境变量 > 默认 mock）：
- *   1. 调用方显式传 `preferReal`（端点解析请求参数得到）；
- *   2. 否则读环境变量 `RUNTIME_ADAPTER`（`mastra` = 真模型，其余 = mock）；
+ * ★ 选择优先级（请求显式 true > 环境变量 > 默认 mock）：
+ *   1. 调用方**显式传 `preferReal: true`**（端点解析请求参数 `realModel` 得到）——最高优先，开真模型；
+ *   2. 否则（调用方传 `false` / 不传）读环境变量 `RUNTIME_ADAPTER`
+ *      （`mastra` = 真模型，其余 = mock）—— 这是部署级全局开关；
  *   3. 缺省 `mock` —— 保持"零配置可跑通闭环"的既有行为不变。
+ *
+ * ★ 为什么 `??` 不够：端点**永远**传一个具体布尔值（默认 `false`），
+ *   导致 `options.preferReal ?? preferRealFromEnv()` 里的右支永远不执行、
+ *   `RUNTIME_ADAPTER` 形同虚设。所以这里用 `=== true` 判断——
+ *   只有显式为 true 才短路，否则一律回落到环境变量。
  *
  * 本文件位于 `src/core/**`：禁止出现任何领域词。
  * 它**不 import** `@mastra/*`（真正的 Mastra 符号在 `mastra/index.ts` 内部），
@@ -45,7 +51,8 @@ function preferRealFromEnv(): boolean {
 }
 
 export function createRuntime(options: CreateRuntimeOptions = {}): RuntimeAdapter {
-  const preferReal = options.preferReal ?? preferRealFromEnv();
+  // 只有显式 true 才短路；false / undefined 都回落到环境变量，让 RUNTIME_ADAPTER 真正成为开关。
+  const preferReal = options.preferReal === true ? true : preferRealFromEnv();
 
   if (!preferReal) {
     return createMockRuntime({

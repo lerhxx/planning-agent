@@ -186,6 +186,43 @@ describe('MastraRuntime（方案 A：内核接口不变）', () => {
     }
   });
 
+  it('回归：RUNTIME_ADAPTER=mastra 必须真正路由到 Mastra（不依赖请求显式 preferReal）', () => {
+    /*
+     * 这正是此前失效的死分支：端点永远传具体布尔值（默认 false），
+     * 旧实现 `options.preferReal ?? preferRealFromEnv()` 的右支永远不执行，
+     * 于是 `.env.local` 里设了 `RUNTIME_ADAPTER=mastra` 也形同虚设、继续跑 mock。
+     * 这条用例在 **不传 preferReal** 的情况下断言环境变量生效。
+     */
+    const saved = ENV_KEYS.map((key) => [key, process.env[key]] as const);
+    process.env['RUNTIME_ADAPTER'] = 'mastra';
+    try {
+      expect(
+        createRuntime({ mastra: { planner: fakePlanner(VALID_DRAFT) } }).id,
+      ).toBe('mastra');
+    } finally {
+      for (const [key, value] of saved) {
+        if (value !== undefined) process.env[key] = value;
+        else delete process.env[key];
+      }
+    }
+  });
+
+  it('回归：RUNTIME_ADAPTER 非 mastra 时回落到 mock（即便没显式 preferReal）', () => {
+    const saved = ENV_KEYS.map((key) => [key, process.env[key]] as const);
+    process.env['RUNTIME_ADAPTER'] = 'mock';
+    try {
+      expect(createRuntime().id).toBe('mock');
+      expect(
+        createRuntime({ mastra: { planner: fakePlanner(VALID_DRAFT) } }).id,
+      ).toBe('mock');
+    } finally {
+      for (const [key, value] of saved) {
+        if (value !== undefined) process.env[key] = value;
+        else delete process.env[key];
+      }
+    }
+  });
+
   it('runTool 走领域工具实现；producesFacts 缺 sourceRefs 时 observer 判 SOURCE_MISSING', async () => {
     /*
      * 注册一个"会编造事实"的领域包：工具声明 producesFacts=true 却不返回 SourceRef。
