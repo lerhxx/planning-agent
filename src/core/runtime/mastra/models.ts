@@ -14,7 +14,18 @@
  */
 import type { OpenAICompatibleConfig } from '@mastra/core/llm';
 
-/** 缺少模型配置。**启动期抛出**，不等到用户点运行才炸。 */
+/**
+ * 缺少模型配置。
+ *
+ * ★ 抛出时机是**首次构造真模型 runtime 时**（即收到带 `realModel: true`
+ *   或 `RUNTIME_ADAPTER=mastra` 的那次请求），**不是进程启动时** ——
+ *   所以应用在没配密钥时照样能正常启动，只是走 mock 路径。
+ *   写"启动期抛出"会让人以为"不配密钥就起不来"，那是错的。
+ *
+ * 为什么不在启动期就炸：默认模式是 mock（零配置可跑通闭环），
+ * 启动期强制要求密钥会让"先跑起来看看"这条最常见的路径不可用。
+ * 真正需要密钥时**当场硬失败**，不让用户以为在跑真模型。
+ */
 export class MissingModelConfigError extends Error {
   /** 缺失的环境变量名，便于运维直接定位。 */
   readonly variable: string;
