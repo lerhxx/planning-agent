@@ -23,7 +23,7 @@ vi.mock('@/src/core/run/engine', () => ({
 }));
 
 import { POST } from '@/app/api/agui/route';
-import type { AguiEvent } from '@ag-ui/core';
+import type { Event as AguiEvent } from '@ag-ui/core';
 
 function makeRequest(): Request {
   return new Request('http://localhost/api/agui', {

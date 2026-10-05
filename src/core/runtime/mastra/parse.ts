@@ -1,11 +1,13 @@
 /**
  * 模型返回值 → 内核类型的校验与归一化（红线 2：来自模型的 JSON 不可信）。
  *
- * ★ 为什么 `structuredOutput` 之后还要再校验一次：
- *   `agent.generate(..., { structuredOutput: zPlanDraft })` 已经让 Mastra 按 schema
- *   约束过一次输出。但"上游已经校验过"不等于"可以信任"——
- *   一旦将来换成自建 provider、换了模型、或有人图省事去掉 structuredOutput，
- *   这里就是唯一拦住脏数据的地方。**双保险，且这一层不依赖任何外部假设。**
+ * ★ 为什么仍然要在这一层（而非依赖模型侧约束）再校验一次：
+ *   上游 `agent.ts` 现在**不再**使用 json_schema 结构化输出
+ *   （DeepSeek 等 OpenAI 兼容端点不支持 `response_format: { type: "json_schema" }`，
+ *   传了会直接 400），而是从模型文本里抠 JSON（`extractPlanJson`）。
+ *   文本抠出来的东西天然不可信，且换 provider / 换模型后形态各异 ——
+ *   **这一层是拦住脏数据的唯一强制点**。即便将来重新启用 structuredOutput，
+ *   这里仍是兜底（红线 2）。**双保险，且这一层不依赖任何外部假设。**
  *
  * ★ 错误码一律取自 `KERNEL_ERROR_CODES`（红线 10：只允许内核通用码）。
  *   这里刻意**没有**引入 `MODEL_INVALID_OUTPUT` / `MODEL_UNAVAILABLE` 这类新码 ——
