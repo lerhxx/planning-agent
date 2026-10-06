@@ -309,7 +309,9 @@ describe('离题引导之后：聊天界面是否卡死', () => {
     sendDisabled: boolean;
     typingWorks: boolean;
     typedValue: string;
-    runningAttr: string | null;
+    // `getAttribute` 缺省返回 `null`，但 TS 把它标成 `string | null | undefined`
+    // （`Element` 上还有 SVG 等重载），这里显式收敛掉 `undefined`。
+    runningAttr: string | null | undefined;
     overlays: string[];
     bubbleText: string;
     pointerChain: string[];
