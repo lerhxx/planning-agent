@@ -9,6 +9,14 @@
  *   但**真正的闸门不在这里** —— `src/core/execution/observer.ts:41-52` 的
  *   `SOURCE_MISSING` 硬检查才是强制点。prompt 只是让模型少犯错，
  *   闸门负责"模型仍然编了"的情况。两者不可互相替代。
+ *
+ * ★ 步骤 id 契约（本次修复点）：`StepDraft.id` 在 schema 里是**可选**的
+ *   （`shared/plan/types.ts` 的 `zStepDraft`），省略时内核按数组下标回落成
+ *   `s-1` / `s-2` / …。旧版 prompt 只渲染了形状、没渲染 `id`，
+ *   模型就无从知道"id 是自己要写的"，于是产出空 `dependsOn` 或引用未声明的 id，
+ *   草案在编译前的依赖检查阶段被整包拒掉。
+ *   因此下面 `renderOutputShape()` + `idContract()` 这两段是**硬契约，不是修辞**：
+ *   少任何一条，模型都会重新掉回悬空依赖。
  */
 import type { PlanRequest, ReplanRequest } from '@/src/core/runtime/adapter';
 
@@ -23,6 +31,43 @@ function commonRules(): string {
     '   事实只能由工具在执行阶段返回；你只负责编排顺序与依赖。',
     '5. 除非确有把握，纯推理步骤（intent 为 null）优于编造工具调用。',
     '6. 输出必须严格符合给定的 JSON 结构，不要包裹在解释性文字或代码块里。',
+  ].join('\n');
+}
+
+/**
+ * 输出形状。**规划与重规划共用同一份**，两处不一致是真实的故障源
+ * （历史上重规划只留了一行 `{ "summary": string, "steps": StepDraft[] }`，
+ * 没展开 `StepDraft`，模型拿到的契约就是残缺的）。
+ *
+ * ★ `id` 必须出现在这里：`zStepDraft.id` 是可选字段，不渲染模型就不知道它能写。
+ */
+function renderOutputShape(): string {
+  return [
+    '## 输出结构',
+    '{ "summary": string, "steps": StepDraft[] }',
+    'StepDraft = { id?: string, type: string, title: string, description?: string, dependsOn: string[],',
+    '              parallelGroup?: string, intent: { toolName, input, producesFacts } | null,',
+    '              estimate?: { durationMs, costCNY, confidence } }',
+  ].join('\n');
+}
+
+/**
+ * 步骤 id 与 `dependsOn` 的契约（硬约束，逐条对齐内核的依赖检查）。
+ *
+ * ★ 三条一条都不能省：
+ *   ① 显式写 `id`（否则回落到按顺序生成的 id，无法在前向引用里稳定指向）；
+ *   ② `dependsOn` 只写本方案内已声明的 `id`，不写下标 / 标题 / 类型名；
+ *   ③ 消费上游产出的步骤必须把上游写进 `dependsOn`，空数组等于"凭空产出"。
+ */
+function idContract(): string {
+  return [
+    '## 步骤 id 与 dependsOn 的契约',
+    '1. 每个步骤都请显式给出 `id`：只用小写字母、数字和短横线，且在本方案内唯一。',
+    '2. 不写 `id` 的步骤，内核会按顺序自动生成 `s-1`、`s-2`…；',
+    '   那样你就无法在 `dependsOn` 里可靠引用它 —— 所以请显式写。',
+    '3. `dependsOn` 只能写**本方案内你已经声明过的步骤 `id`**：',
+    '   不得写数组下标、不得写步骤标题、不得写步骤类型名。',
+    '4. 若某步骤需要消费前面步骤的产出，**必须**把这些步骤的 id 写进 `dependsOn`，不得留空数组。',
   ].join('\n');
 }
 
@@ -55,14 +100,9 @@ export function planSystemPrompt(request: PlanRequest): string {
     '',
     commonRules(),
     '',
-    '## 输出结构',
-    '{ "summary": string, "steps": StepDraft[] }',
-    'StepDraft = { type: string, title: string, description?: string, dependsOn: string[],',
-    '              parallelGroup?: string, intent: { toolName, input, producesFacts } | null,',
-    '              estimate?: { durationMs, costCNY, confidence } }',
+    renderOutputShape(),
     '',
-    '注意：`dependsOn` 引用的是步骤的**数组下标顺序**无关的**类型+标题**无法被引用，',
-    '所以请给每个步骤安排一个稳定顺序，并让 dependsOn 指向**同方案内已存在的步骤**。',
+    idContract(),
   ].join('\n');
 }
 
@@ -94,7 +134,11 @@ export function replanSystemPrompt(request: ReplanRequest): string {
     '4. 新方案必须与原方案**实质不同**：仅改标题、仅调顺序都算原地打转，',
     '   会被内核的收敛判定拦下并转人工。这里请真正改变步骤的类型或意图。',
     '',
-    '## 输出结构',
-    '{ "summary": string, "steps": StepDraft[] }',
+    renderOutputShape(),
+    '',
+    idContract(),
+    '',
+    '5. 重规划时，"本方案内已声明的步骤"包含两类：上方"必须保留的步骤"的 id，',
+    '   以及你本次新声明的步骤 id —— 两者都可以写进 `dependsOn`。',
   ].join('\n');
 }
