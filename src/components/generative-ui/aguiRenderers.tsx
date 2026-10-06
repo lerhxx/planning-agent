@@ -29,6 +29,7 @@ import { z } from 'zod';
 import { makeFormKey } from '@/shared/plan/types';
 
 import ComponentRenderer from './ComponentRenderer';
+import CardErrorBoundary from './CardErrorBoundary';
 import { registerCoreUIComponents } from './coreComponents';
 import {
   listCoreComponents,
@@ -415,15 +416,17 @@ export function PlanActivityCard(props: PlanActivityCardProps): ReactNode {
 
       {open ? (
         <div className="border-t border-[var(--color-divider)] px-[var(--spacing-gutter)] py-3">
-          <ComponentRenderer
-            node={{
-              nodeId,
-              component: 'PlanView',
-              props: (content ?? {}) as Record<string, unknown>,
-              status: parsed.success ? 'ready' : 'degraded',
-            }}
-            domainId={domainId}
-          />
+          <CardErrorBoundary label="PlanView">
+            <ComponentRenderer
+              node={{
+                nodeId,
+                component: 'PlanView',
+                props: (content ?? {}) as Record<string, unknown>,
+                status: parsed.success ? 'ready' : 'degraded',
+              }}
+              domainId={domainId}
+            />
+          </CardErrorBoundary>
         </div>
       ) : null}
     </div>
@@ -464,26 +467,28 @@ function createRegistryRenderer(
     const { submit, notice } = useInterruptSubmit(props.agent);
 
     return (
-      <ActivityCardFrame eyebrow={definition.description || definition.name}>
-        <ComponentRenderer
-          node={{
-            nodeId: readMessageId(props.message) ?? props.activityType,
-            component: props.activityType,
-            props: props.content ?? {},
-            status: 'ready',
-          }}
-          domainId={domainId}
-          onAction={submit}
-        />
-        {notice ? (
-          <p
-            role="status"
-            className="mt-2 rounded-[var(--radius-control)] bg-[var(--color-fill-soft)] px-3 py-2 text-[12px] text-[var(--color-text-secondary)]"
-          >
-            {notice}
-          </p>
-        ) : null}
-      </ActivityCardFrame>
+      <CardErrorBoundary label={definition.name}>
+        <ActivityCardFrame eyebrow={definition.description || definition.name}>
+          <ComponentRenderer
+            node={{
+              nodeId: readMessageId(props.message) ?? props.activityType,
+              component: props.activityType,
+              props: props.content ?? {},
+              status: 'ready',
+            }}
+            domainId={domainId}
+            onAction={submit}
+          />
+          {notice ? (
+            <p
+              role="status"
+              className="mt-2 rounded-[var(--radius-control)] bg-[var(--color-fill-soft)] px-3 py-2 text-[12px] text-[var(--color-text-secondary)]"
+            >
+              {notice}
+            </p>
+          ) : null}
+        </ActivityCardFrame>
+      </CardErrorBoundary>
     );
   }
 
@@ -520,26 +525,28 @@ function createFallbackActivityRenderer(): AnyActivityMessageRenderer {
     const { submit, notice } = useInterruptSubmit(props.agent);
 
     return (
-      <ActivityCardFrame eyebrow={`活动 · ${props.activityType}`}>
-        <ComponentRenderer
-          node={{
-            nodeId: readMessageId(props.message) ?? props.activityType,
-            component: props.activityType,
-            props: props.content ?? {},
-            status: 'ready',
-          }}
-          domainId={domainId}
-          onAction={submit}
-        />
-        {notice ? (
-          <p
-            role="status"
-            className="mt-2 rounded-[var(--radius-control)] bg-[var(--color-fill-soft)] px-3 py-2 text-[12px] text-[var(--color-text-secondary)]"
-          >
-            {notice}
-          </p>
-        ) : null}
-      </ActivityCardFrame>
+      <CardErrorBoundary label={`activity:${props.activityType}`}>
+        <ActivityCardFrame eyebrow={`活动 · ${props.activityType}`}>
+          <ComponentRenderer
+            node={{
+              nodeId: readMessageId(props.message) ?? props.activityType,
+              component: props.activityType,
+              props: props.content ?? {},
+              status: 'ready',
+            }}
+            domainId={domainId}
+            onAction={submit}
+          />
+          {notice ? (
+            <p
+              role="status"
+              className="mt-2 rounded-[var(--radius-control)] bg-[var(--color-fill-soft)] px-3 py-2 text-[12px] text-[var(--color-text-secondary)]"
+            >
+              {notice}
+            </p>
+          ) : null}
+        </ActivityCardFrame>
+      </CardErrorBoundary>
     );
   }
 
