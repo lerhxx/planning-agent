@@ -167,21 +167,25 @@ export async function POST(request: Request): Promise<Response> {
       let terminalSent = false;
       let errored = false;
 
+      /**
+       * 传输层唯一的写入口：终态之后**一个字都不发**。
+       *
+       * ★ 为什么是"挡一切"而不是"只挡终态"：RUN_ERROR 在 AG-UI 协议里是一堵墙 ——
+       *   客户端收到它之后，对**任意**后续事件都会抛 AGUIError，不只是终态事件。
+       *   实测内核失败路径先发 `error`（翻成 RUN_ERROR）、再发 `component_start`
+       *   （翻成 ACTIVITY_SNAPSHOT），控制台刷满
+       *   "Cannot send event type 'ACTIVITY_SNAPSHOT': The run has already errored
+       *   with 'RUN_ERROR'. No further events can be sent."，
+       *   且错误卡片永远到不了界面。
+       *   所以这里不能依赖上游"记得别再发"：一旦 `errored`（或 `terminalSent`）
+       *   为真，后续事件一律丢弃，由传输层自己保证协议不被破坏。
+       *   正常路径（先 RUN_FINISHED 收尾）行为不变。
+       *
+       * @param event 待写入的 AG-UI 事件
+       */
       const writeEvent = (event: AguiEvent): void => {
         if (closed) return;
-        /*
-         * ★ 终态事件互斥：RUN_FINISHED 与 RUN_ERROR 都是 run 的终态，
-         *   发过其一后就不再发另一个。否则 AG-UI 客户端会抛
-         *   "Cannot send event type 'RUN_FINISHED': The run has already errored"
-         *   （本地实测：真模型调用失败时先发 RUN_ERROR 再发 RUN_FINISHED 必炸）。
-         *   这道守卫让任何路径都不可能错位发送终态事件。
-         */
-        if (
-          (event.type === EventType.RUN_FINISHED || event.type === EventType.RUN_ERROR) &&
-          (terminalSent || errored)
-        ) {
-          return;
-        }
+        if (terminalSent || errored) return;
 
         let chunk: Uint8Array;
         try {

@@ -201,12 +201,22 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
     return { status, plan, traceId, reason };
   };
 
+  /**
+   * 失败收尾：先把要展示的内容发完，最后才发终态事件。
+   *
+   * ★ 发射顺序不变式（改动前请看懂再动）：`error` 是本轮对外的**终态**事件 ——
+   *   传输层把它翻成协议终态之后，客户端会拒收它后面的**任何**事件（连组件增量
+   *   也算，实测报错形如 "The run has already errored ... No further events can be
+   *   sent"）。所以凡是想让用户看见的东西（组件三连 + `plan_status`）都必须排在
+   *   `error` 之前；`error` 之后只剩 `finish()` 那条内核记账用的终态事件，
+   *   它在协议侧会被终态互斥规则丢弃 —— 也就是说客户端看到的最后一个事件就是
+   *   `error`，而错误卡片已经在 `error` 之前完整送达。
+   */
   const failRun = async (
     plan: Plan | null,
     message: string,
     reason: string,
   ): Promise<EngineResult> => {
-    deps.emit({ type: 'error', traceId, message, recoverable: false });
     await emitComponent({
       nodeId: `node-error-${traceId}`,
       component: 'ErrorState',
@@ -221,6 +231,7 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
         revision: plan.revision,
       });
     }
+    deps.emit({ type: 'error', traceId, message, recoverable: false });
     return finish('failed', plan, reason);
   };
 
