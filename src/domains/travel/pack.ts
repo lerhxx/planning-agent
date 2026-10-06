@@ -7,6 +7,7 @@
 import type { DomainPack } from '@/shared/domain/types';
 import { travelMeta } from './meta';
 import { travelTools } from './tools';
+import { travelClarify } from './clarify';
 import { createTripProviders } from './providers';
 import { travelUI } from './ui';
 import { travelPrompts } from './prompts';
@@ -21,6 +22,11 @@ export const travelPack: DomainPack = {
   prompts: travelPrompts,
   planning: travelPlanning,
   evaluation: travelEvaluation,
+
+  // ★ 目标澄清注入点：让"北京一日游"这类目标走**领域表单**，
+  // 而不是内核那句笼统的"描述太短"（后者只会弹出两个没有信息量的按钮）。
+  // 详见 `clarify.ts` 文件头 —— 那里记录了为什么必须拆成"问 / 答"两个纯函数。
+  clarify: travelClarify,
 
   lifecycle: {
     init() {

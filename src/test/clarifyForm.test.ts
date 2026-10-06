@@ -143,6 +143,7 @@ describe('L6 · makeFormKey 性质守卫（"错而不空"的碰撞形态当前�
   const QUESTION_IDS = [
     'clarify:travel.image-understand', // travel 工具澄清（图片未识别）
     'clarify:travel.trip-brief', // travel 工具澄清（信息不足）
+    'clarify:travel.goal-brief', // travel 目标澄清（clarify 槽位，"北京一日游"走这条）
     'clarify:validation', // 内核校验转人工
     'clarify:constraint.generic', // 内核目标澄清
     'clarify:tool:s-1', // MockRuntime 脚本
@@ -150,6 +151,9 @@ describe('L6 · makeFormKey 性质守卫（"错而不空"的碰撞形态当前�
   const FIELD_IDS = [
     'days',
     'budget',
+    'budget_cny', // travel 目标澄清：预算
+    'depart_date', // travel 目标澄清：出发日期
+    'pace', // travel 目标澄清：出行节奏
     'unresolved_action', // K5 跳过语义载体
     'asset:6f1d3f10-1111-4111-8111-111111111111', // `asset:<assetId>`
   ];

@@ -167,19 +167,30 @@ function describeError(error: unknown): string {
  *
  * ★ 两条澄清路径的**键约定不同**，不能混（混了就是"看起来回答成功、实际没人吃到"）：
  *
- * 1. **目标澄清**（扁平选项，`select_option`）
+ * 1. **目标澄清**
  *    键 = 引擎下发的 `questionId`，形如 `clarify:<missingField>`；
  *    消费点是 `src/core/goal/clarify.ts` 的 `applyAnswers`，它**只查**
  *    `answers['clarify:' + field]`。所以这里**绝不自己拼键** —— 拼错了该 field
  *    会永远留在 `missingFields` → 追问死循环且不报错。
  *
+ *    ★ 目标澄清现在有**两种形态**（原先只有第一种）：
+ *    - **扁平选项**（`select_option`）：内核模板兜底，键如上。
+ *    - **表单**（`submit_form`）：领域包通过 `clarify` 槽位下发的字段表。
+ *      这类 questionId 形如 `clarify:travel.goal-brief`，**键是 `makeFormKey` 的
+ *      `qid::fid`**（走下面第 2 条路径），消费方是**领域包自己的 `applyAnswers`**
+ *      （`src/domains/travel/clarify.ts`）—— 它与本文件同在一条回灌链上，
+ *      因此**内核那条 `applyAnswers` 不需要改**：两者读的是同一个 `answers` 对象，
+ *      各取所需、互不覆盖（一个查 `clarify:<field>`，一个查 `<qid>::<fid>`，键空间不相交）。
+ *
  * 2. **工具澄清**（表单，`submit_form`）
  *    键 = `makeFormKey(questionId, fieldId)`（`${qid}::${fid}`，K3 约定）；
  *    消费点是**领域包**（如 `src/domains/travel/tools.ts` 的
  *    `answers[makeFormKey(questionId, fieldId)]`）。
- *    目标澄清路径恒为扁平选项（J3 已拍板），所以表单值不该进 `applyAnswers`。
  *    ★ 多选值按 K3 用 JSON 数组编码、由领域侧 `safeParse` 还原 —— 在这条路上
  *    它是合法值，不能拦。
+ *
+ * ★ 两条路径都用 `action.type` 分派，**不靠 questionId 的形状去猜**：
+ * 猜测式分派正是"拼错键却看不出来"的来源，而这类失败**不报错**。
  *
  * 凡是"消费方必然丢弃"的载荷一律**不许静默发出**：返回 `ok: false` + 原因，
  * 由调用方渲染成可见提示。

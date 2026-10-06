@@ -3,6 +3,13 @@
  *
  * 信息不足时**不硬猜**（C0-01）：生成内核通用的澄清问题与候选选项，
  * 由 `ClarifyOptions` 组件呈现给用户点选。
+ *
+ * ★ 领域注入（`clarify` 槽位）：内核只认"缺哪个字段"，**不知道该问什么领域问题**。
+ * 因此澄清问题有一个**领域优先**的来源：`DomainClarifyContribution`（见 `shared/domain/types`）。
+ * 领域有话说 → 用它的（通常是 `fields` 表单，一次收集齐）；
+ * 领域返回 null / 没这个槽位 → 回落到本文的内核模板（旧的扁平选项）。
+ * 这条优先序是本文件唯一新增的分支，两条路径的产物都是合法的 `ClarifyQuestion`，
+ * 下游（引擎、组件、传输层）**完全不需要区分**。
  */
 import {
   zClarifyQuestion,
@@ -10,6 +17,7 @@ import {
   type Goal,
   type GoalConstraint,
 } from '@/shared/plan/types';
+import type { DomainClarifyContribution } from '@/shared/domain/types';
 
 /** 缺失字段 → 澄清问题模板。文案全部内核通用，不含领域语义。 */
 const QUESTION_TEMPLATES: Record<
@@ -122,4 +130,66 @@ export function applyAnswers(goal: Goal, answers: Record<string, string>): Goal 
 /** 是否还需要继续追问。 */
 export function needsClarification(goal: Goal): boolean {
   return goal.missingFields.length > 0;
+}
+
+/* ------------------------------------------------------------------ *
+ * 领域注入点（领域优先，内核模板兜底）
+ * ------------------------------------------------------------------ */
+
+/**
+ * 领域是否已经消费掉本轮的答案 → 是则**用领域的目标**（`missingFields` 可能已被摘掉）。
+ *
+ * ★ 顺序很重要：必须**先**让领域落地答案，**再**判定要不要继续追问。
+ * 反过来（先 `needsClarification` 再问领域）的话，领域永远拿不到运行机会 ——
+ * 内核已经在 `engine.ts` 的 `needsClarification` 分支里 early-return 了，
+ * 工具澄清（领域下发的表单）根本没机会跑。这正是本函数存在的原因。
+ *
+ * ★ 领域实现有 bug（消费了值却没摘 `missingFields`）时，本函数**不会**替它兜底：
+ * 那属于领域 bug，应该在领域自己的测试里红；内核悄悄替它摘字段反而会掩盖问题。
+ */
+export function applyDomainAnswers(
+  goal: Goal,
+  answers: Record<string, string>,
+  contribution?: DomainClarifyContribution,
+): Goal {
+  if (!contribution?.applyAnswers) return goal;
+  const applied = contribution.applyAnswers(goal, answers);
+  // 防御：领域若返回了非法目标（绕过 zGoal 的 undefined / null），宁可原样退回内核目标，
+  // 也不能让整轮 run 崩在一个本该"只是没 clarifying"的分支上。
+  if (!applied || typeof applied !== 'object') return goal;
+  return applied;
+}
+
+/**
+ * 取本轮要下发的澄清问题：**领域优先，内核模板兜底**。
+ *
+ * @param onlyField 只澄清这一个缺失字段（引擎下发 `ClarifyOptions` 时只发第一张卡）。
+ */
+export function buildClarifyQuestionsForField(
+  goal: Goal,
+  onlyField: string,
+  answers: Record<string, string>,
+  contribution?: DomainClarifyContribution,
+): ClarifyQuestion[] {
+  // ① 领域优先：领域能问出**具体字段的表单**（"几天 / 哪天出发 / 什么偏好"），
+  //    比内核的"描述太短要不要补充"有用得多 —— 后者对"北京一日游"这种
+  //    已经说清城市和天数、只差预算与日期的目标毫无帮助。
+  const fromDomain = contribution?.buildQuestion?.({ goal, answers }) ?? null;
+  if (fromDomain) {
+    // 领域也要守契约：id / prompt 必填。领域包是"插件"，插件不该让整轮 run 崩掉。
+    const parsed = zClarifyQuestion.safeParse(fromDomain);
+    if (parsed.success) return [parsed.data];
+  }
+
+  // ② 兜底：内核通用模板（旧的扁平选项路径，保持向后兼容）。
+  const template = QUESTION_TEMPLATES[onlyField] ?? QUESTION_TEMPLATES['constraint.generic'];
+  if (!template) return [];
+  return [
+    zClarifyQuestion.parse({
+      id: `clarify:${onlyField}`,
+      prompt: template.prompt,
+      options: template.options,
+      multi: false,
+    }),
+  ];
 }

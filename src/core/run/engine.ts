@@ -29,7 +29,7 @@ import { executeStep, propsToPatches } from '@/src/core/execution/executor';
 import { partitionBatch, isLiveStepStatus } from '@/src/core/execution/scheduler';
 import type { Observation } from '@/src/core/execution/observer';
 import { parseGoal } from '@/src/core/goal/parse';
-import { applyAnswers, buildClarifyQuestions, needsClarification } from '@/src/core/goal/clarify';
+import { applyAnswers, applyDomainAnswers, buildClarifyQuestionsForField, needsClarification } from '@/src/core/goal/clarify';
 import { applyEdit } from '@/src/core/planning/edit';
 import { applyReplanDraft, createPlan } from '@/src/core/planning/planner';
 import { highestSeverity, validatePlan, validateStep } from '@/src/core/planning/validate';
@@ -234,10 +234,30 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
     { runId, raw: input.goal, now: now() },
     { requireConstraints: input.requireConstraints ?? false },
   );
-  const goal = applyAnswers(parsed.goal, input.answers ?? {});
+  const answers = input.answers ?? {};
+
+  /**
+   * ★ 领域澄清优先：领域包可以消费上一轮的表单答案，**并顺带摘掉 `missingFields`**。
+   *
+   * 为什么必须在 `needsClarification` 之前调用：
+   * 本文件原本是「内核先判 `needsClarification` → 是则 early-return → 否则才建计划、
+   * 跑工具」。这意味着领域下发的表单澄清（领域包 `tools.ts` 里那条）
+   * **永远轮不到** —— 工具根本没被建出来。对"北京一日游"这类目标，内核那一句
+   * `raw.length < minRawLength` 会直接拦下，用户只看到两个按钮。
+   * 领域注入点在 `needsClarification` **之前**生效，才有一条"领域能问领域问题"的通路。
+   *
+   * ★ 领域无关：这里只认"有没有 clarify 槽位"，不认任何领域内容（红线：core 不含领域词）。
+   */
+  const clarifyContribution = getDomainPack(domainId)?.clarify;
+  const goal = applyDomainAnswers(applyAnswers(parsed.goal, answers), answers, clarifyContribution);
 
   if (needsClarification(goal)) {
-    const question = buildClarifyQuestions(goal)[0];
+    const question = buildClarifyQuestionsForField(
+      goal,
+      goal.missingFields[0] ?? 'goal.detail',
+      answers,
+      clarifyContribution,
+    )[0];
     if (question) {
       await emitComponent({
         nodeId: 'node-clarify',

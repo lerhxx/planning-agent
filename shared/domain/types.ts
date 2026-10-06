@@ -19,6 +19,7 @@ import {
   zStepDraft,
   type AgentError,
   type ClarifyQuestion,
+  type Goal,
   type InputSignalKind,
   type Plan,
   type SourceRef,
@@ -310,6 +311,53 @@ export interface DomainEvaluationContribution {
 }
 
 /* ------------------------------------------------------------------ *
+ * ⑨ clarify（可选）：目标级澄清的**领域注入点**
+ * ------------------------------------------------------------------ */
+
+/**
+ * 领域包参与「目标澄清」的注入点（**可选段**）。
+ *
+ * ★ 为什么需要它：内核的 `buildClarifyQuestions` 只能问**领域无关**的问题
+ * （"描述太短" / "有没有预算"）。但目标里到底是"天数不够"还是"缺出发日期"，
+ * 只有领域知道。让内核猜 ⇒ 要么问错（问了一个用户已经说过的东西），
+ * 要么把领域词写进 `src/core/**` ⇒ 破 0 判据当场红。
+ *
+ * ★ 职责边界（**刻意不对称**，这是本段存在的全部意义）：
+ * - `buildQuestion` 只负责"**问什么**"：返回一张 `fields` 表单，交给 `ClarifyOptions` 渲染；
+ * - `applyAnswers` 只负责"**答完怎么落地**"：把答案写进 `Goal`（约束 / 资源 / 目标文本）。
+ *
+ * ★★ 为什么要拆成两个函数、而不是一个"问完顺便答"的东西？
+ * 因为内核的澄清是**跨 run 的**：第一次 run 只问（返回 `awaiting_user`），
+ * 第二次 run 才带着 `answers` 重进来。两个函数各自纯函数化，
+ * 才让"问"和"答"能被**分别**测试，且不依赖任何隐藏状态。
+ *
+ * ★★ 死循环防线（本项目最忌讳的静默失败，见领域包 `tools.ts` 里 `readAnswers` 的长注释）：
+ * `applyAnswers` **必须**把已被消费的 `missingFields` 移除。
+ * 若领域只写了值却忘了摘掉 `missingFields`，`needsClarification` 恒为 true →
+ * 引擎每轮都重新下发同一张卡 → 用户永远走不出去，且**没有任何报错**。
+ * `src/test/clarifyGoalForm.test.ts` 的「不会追问死循环」一节就是这条防线的执行点。
+ */
+export interface DomainClarifyContribution {
+  /**
+   * 依据目标现状产出澄清问题；返回 `null` 表示"本领域认为无需澄清"。
+   *
+   * ★ 必须**纯函数**：同样的 `(goal, answers)` 必须给出同样的问题，
+   * 否则「重试同一张卡」会得到不同字段，用户填的答案对不上。
+   */
+  buildQuestion?(input: {
+    goal: Goal;
+    answers: Record<string, string>;
+  }): ClarifyQuestion | null;
+  /**
+   * 把上一轮表单答案写回目标（返回**新**对象，不改入参）。
+   *
+   * ★ 引擎在 `needsClarification` 判定**之前**调用它 —— 这是"领域有机会把
+   * `goal.detail` 摘掉"的唯一时机。领域不消费，内核就继续追问（预期行为）。
+   */
+  applyAnswers?(goal: Goal, answers: Record<string, string>): Goal;
+}
+
+/* ------------------------------------------------------------------ *
  * ⑧ lifecycle（可选）
  * ------------------------------------------------------------------ */
 
@@ -333,9 +381,11 @@ export interface DomainPack {
   planning: DomainPlanningContribution;
   evaluation: DomainEvaluationContribution;
   lifecycle?: DomainLifecycle;
+  /** 目标澄清的领域注入点（可选）。见 `DomainClarifyContribution`。 */
+  clarify?: DomainClarifyContribution;
 }
 
-/** 必填段：缺一段则注册失败（PRD §7 / C0-11）。`lifecycle` 可选。 */
+/** 必填段：缺一段则注册失败（PRD §7 / C0-11）。`lifecycle` / `clarify` 可选。 */
 export const REQUIRED_DOMAIN_PACK_SEGMENTS = [
   'meta',
   'tools',
