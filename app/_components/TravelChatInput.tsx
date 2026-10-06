@@ -14,6 +14,13 @@
  * 2. **`containerRef` 必须挂到胶囊根节点。**
  *    `<CopilotChatView>` 读它算滚动留白；不挂 → 最后一条消息被输入框盖住。
  *
+ * 2b. **胶囊根节点必须挂 `pointer-events-auto`（别删）。**
+ *    `<CopilotChatView>` 会用一层 `cpk:pointer-events-none` 的 `copilot-input-overlay`
+ *    绝对定位层包住整个输入区，而 `pointer-events` 是继承属性。SDK 的默认渲染路径靠内层
+ *    一个 `cpk:pointer-events-auto` 把它还回来，但**我们走的 `children` 渲染函数分支没有**
+ *    那层包裹 —— 不显式写 `pointer-events-auto`，收到第一条回复后整颗胶囊就变成不可命中：
+ *    输入框打不了字、所有按钮点不动，且**控制台没有任何报错**（纯 CSS 问题，错误边界抓不到）。
+ *
  * 3. **不要覆盖 `args.textArea` 的 className。** SDK 自带 textarea 有自己的样式与
  *    自适应高度逻辑，外套一层即可，别塞 className 进去。
  *
@@ -186,7 +193,37 @@ export function TravelChatInput(props: CopilotChatInputProps): React.ReactNode {
       {(args) => (
         <div
           ref={args.containerRef}
-          className="flex flex-col rounded-[var(--radius-card)] border px-3 py-2 shadow-[var(--shadow-float)]"
+          /*
+           * 测试钩子：给回归测试一个稳定锚点来断言本节点的 class
+           * （见 `app/_components/reproChatFreeze.test.tsx`）。纯 data 属性，无运行时开销。
+           */
+          data-testid="travel-chat-input-capsule"
+          /*
+           * ★ `pointer-events-auto` 不是装饰，是**必需**（"回复一生成，输入框+所有按钮一起失活"的根因）。
+           *
+           * 背景：`<CopilotChatView>` 会把整个输入区包进一层
+           * `data-testid="copilot-input-overlay"` 的 `cpk:pointer-events-none` 绝对定位层
+           * （react-core cjs:351420），让消息列表能滚到输入框下面。
+           * `pointer-events` 是**继承**属性，所以默认情况下整颗胶囊都变成"不可命中"。
+           *
+           * SDK 自己怎么救的：默认（非 children）渲染路径里，
+           * 外层是 `cpk:pointer-events-none … cpk:relative cpk:z-20`（cjs:60340），
+           * 内层另起一个 div 挂 `cpk:pointer-events-auto`（cjs:61093）把交互还回来。
+           *
+           * 而我们走的是 `children` 渲染函数（slot API）—— 那条早返回分支
+           * （cjs:47487）只渲染一个 `display: contents` 的壳再调用 children(childProps)，
+           * **全程没有 pointer-events-auto**。于是胶囊永远继承 overlay 的 `none`。
+           *
+           * 为什么症状是"打不了字 + 按钮全点不动 + 控制台干净"：
+           * 这是纯 CSS 命中测试问题，不是 JS 异常 —— 所以没有红字，
+           * 错误边界（CardErrorBoundary / app/error.tsx）也永远抓不到。
+           * 为什么"第一句之前能打字、收到回复后就不行"：
+           * 消息数为 0 时 CopilotChatView 走的是另一条分支，根本不渲染那层 overlay；
+           * 一旦有消息（= 收到任意回复，含离题引导气泡）overlay 就出现并开始拦截。
+           *
+           * 一行修复，不改 SDK、不加补丁。加上即可。
+           */
+          className="pointer-events-auto flex flex-col rounded-[var(--radius-card)] border px-3 py-2 shadow-[var(--shadow-float)]"
           style={{ borderColor: 'var(--color-border)', background: 'var(--color-card)' }}
         >
           {/* 顶部：附件预览（参考 DeepSeek 输入框，缩略图放在胶囊内上方）。 */}
