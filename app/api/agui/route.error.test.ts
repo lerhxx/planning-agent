@@ -29,11 +29,11 @@ function makeRequest(): Request {
   return new Request('http://localhost/api/agui', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({
-      threadId: 't-error',
-      runId: 'r-error',
-      messages: [{ id: 'm1', role: 'user', content: '做个两步计划' }],
-    }),
+      body: JSON.stringify({
+        threadId: 't-error',
+        runId: 'r-error',
+        messages: [{ id: 'm1', role: 'user', content: '帮我规划一个两天一夜的东京行程' }],
+      }),
   });
 }
 

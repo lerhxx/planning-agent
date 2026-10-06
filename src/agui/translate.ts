@@ -118,6 +118,26 @@ function createRunFinishedEvent(
 }
 
 /**
+ * 构造一条"离题引导气泡"的 AG-UI 事件序列（TEXT_MESSAGE 三连）。
+ *
+ * 与 translator 内部 `startBodyIfNeeded` 产出的形状完全一致，只是 messageId 独立
+ * （`guide-${runId}`），不与规划摘要的 `body-${runId}` 冲突。离题消息走这条路径，
+ * 由 `app/api/agui/route.ts` 在进规划前短路下发，不进内核。
+ *
+ * 空文本直接返回 `[]`，避免发出一个没有内容的气泡。
+ */
+export function createGuidanceEvents(options: TranslatorOptions, text: string): AguiEvent[] {
+  if (text.trim().length === 0) return [];
+
+  const messageId = `guide-${options.runId}`;
+  return [
+    { type: EventType.TEXT_MESSAGE_START, messageId, role: 'assistant' },
+    { type: EventType.TEXT_MESSAGE_CONTENT, messageId, delta: text },
+    { type: EventType.TEXT_MESSAGE_END, messageId },
+  ];
+}
+
+/**
  * Create a stateful, deterministic adapter from kernel stream events to AG-UI.
  * State is scoped to one run and only tracks identifiers required by JSON Patch.
  */

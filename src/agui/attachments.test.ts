@@ -38,8 +38,11 @@ const PROBE_DOMAIN_ID = 'probe-agui-attachments';
  * 目标文案：**不含任何约束关键词**（预算 / 期限 / 数量 / 排除项），
  * 因此 `requireConstraints: true` 时必然被判"信息不足"走澄清 ——
  * 这让"有没有被追问卡住"成为一个可观测的开关。
+ *
+ * ★ 含旅游关键词（旅游 / 行程）：这条用例验证的是**附件通道**，不是内容审核，
+ *   所以目标要能过离题拦截、真正进内核；否则会被新加的离题引导短路掉。
  */
-const GOAL = '帮我看看这张图里有什么，整理成一份清单';
+const GOAL = '帮我看看这张旅游照片里有什么，整理成一份行程清单';
 
 let captured: RunContext | null = null;
 

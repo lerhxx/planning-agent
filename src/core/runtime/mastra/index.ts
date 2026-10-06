@@ -30,6 +30,9 @@ import type { RunContext } from '@/shared/run/types';
 import { createMastraPlanner, type Planner } from './agent';
 import { parsePlanDraft, parseToolResult, toolFailure } from './parse';
 import { textModel } from './models';
+import { createTextClassifier } from './classifier';
+
+export { createTextClassifier };
 
 /** 规划 / 重规划的产出没通过 schema 校验。路由会把它转成可见的 RUN_ERROR。 */
 export class MastraOutputError extends Error {

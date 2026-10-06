@@ -20,7 +20,9 @@ import { runGoal } from '@/src/core/run/engine';
 import { createRuntime } from '@/src/core/runtime/factory';
 import { registerAllDomains } from '@/src/domains';
 import { resolveDomainId } from '@/src/agui/domain';
-import { createTranslator, mergeResumeAnswers } from '@/src/agui/translate';
+import { resolveRelevance, DEFAULT_GUIDANCE, TRAVEL_CLASSIFY_INSTRUCTION, TRAVEL_AFFIRMATIVE } from '@/src/agui/relevance';
+import { createTranslator, createGuidanceEvents, mergeResumeAnswers } from '@/src/agui/translate';
+import { createTextClassifier } from '@/src/core/runtime/mastra';
 import {
   BAD_ATTACHMENTS,
   parseForwardedAttachments,
@@ -216,6 +218,34 @@ export async function POST(request: Request): Promise<Response> {
           ? {}
           : { protocolVersion: input.protocolVersion }),
       });
+
+      /*
+       * ★ 离题拦截（混合判定，用户选定）：旅游规划小助手只对旅游相关目标进规划。
+       *   - 明显旅游词 → 直接放行；
+       *   - 明显离题词 → 引导；
+       *   - 灰区 → 模型兜底（createTextClassifier 没配真模型时返回 null，
+       *     灰区按"默认引导"处理）。
+       * 命中离题则只发引导气泡 + RUN_FINISHED，跳过 domain 解析 / 附件校验 / runGoal，
+       * 不消耗任何模型调用。这条短路是"你是旅游规划小助手"人设的强制落地点。
+       */
+      const classifier = createTextClassifier(TRAVEL_CLASSIFY_INSTRUCTION, TRAVEL_AFFIRMATIVE);
+      const relevance = await resolveRelevance(goal, classifier ?? undefined);
+      if (!relevance.related) {
+        for (const event of createGuidanceEvents(
+          { threadId: input.threadId, runId: input.runId },
+          DEFAULT_GUIDANCE,
+        )) {
+          writeEvent(event);
+        }
+        finishRun();
+        closed = true;
+        try {
+          controller.close();
+        } catch {
+          // 客户端可能在内核停止前已关闭流。
+        }
+        return;
+      }
 
       const emit = (kernelEvent: StreamEvent): void => {
         for (const event of translator.push(kernelEvent)) writeEvent(event);
