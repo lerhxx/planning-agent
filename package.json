@@ -13,7 +13,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check:commit-prefix": "bash scripts/check-commit-prefix.sh",
-    "segment-lines": "bash scripts/segment-lines.sh"
+    "segment-lines": "bash scripts/segment-lines.sh",
+    "postinstall": "node scripts/patch-copilotkit.mjs"
   },
   "dependencies": {
     "@ag-ui/client": "1.0.1",
