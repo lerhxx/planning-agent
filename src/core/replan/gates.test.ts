@@ -33,13 +33,15 @@ describe('checkGates（三重闸门）', () => {
     expect(outcome).toEqual({ allowed: false, reason: 'MAX_COST' });
   });
 
-  it('时长闸门：超过 25s → MAX_DURATION', () => {
-    const outcome = checkGates(budget(), 25_001);
+  it('时长闸门：超过 90s → MAX_DURATION', () => {
+    const outcome = checkGates(budget(), DEFAULT_GATE_CONFIG.maxDurationMs + 1);
     expect(outcome).toEqual({ allowed: false, reason: 'MAX_DURATION' });
   });
 
   it('边界值：恰好等于上限仍放行（上限语义是"不超过"）', () => {
-    expect(checkGates(budget({ replanCount: 4, costCNY: 2 }), 25_000)).toEqual({ allowed: true });
+    expect(checkGates(budget({ replanCount: 4, costCNY: 2 }), 90_000)).toEqual({
+      allowed: true,
+    });
   });
 
   /**
@@ -50,7 +52,7 @@ describe('checkGates（三重闸门）', () => {
    * 算好、已经付过钱的候选计划丢掉）。只保留其中一条都会让另半个语义悄悄退化。
    */
   it('★ 反向锁：同一组超预算输入下，事前闸门仍必须 MAX_DURATION', () => {
-    // 真模型重排一次调用的典型耗时：远超 25s 上限。
+    // 真的把时钟顶过上限（当前 90s + 15s），确保这条不是靠"刚好没超时"空转。
     const wayOver = DEFAULT_GATE_CONFIG.maxDurationMs + 15_000;
     expect(checkGates(budget(), wayOver)).toEqual({ allowed: false, reason: 'MAX_DURATION' });
   });
@@ -189,7 +191,26 @@ describe('isStagnant / judgeConvergence（只做收敛判定）', () => {
   it('默认闸门配置与 PRD 一致', () => {
     expect(DEFAULT_GATE_CONFIG.maxReplans).toBe(5);
     expect(DEFAULT_GATE_CONFIG.maxCostCNY).toBe(2);
-    expect(DEFAULT_GATE_CONFIG.maxDurationMs).toBe(25_000);
+    // ★ 90s = 真模型"规划往返 + 预留一次重排往返 + 余量"。改这个值前请先读
+    //   `zGateConfig.maxDurationMs` 的推导注释，并同步抬高部署平台的 `maxDuration`。
+    expect(DEFAULT_GATE_CONFIG.maxDurationMs).toBe(90_000);
     expect(DEFAULT_GATE_CONFIG.minDelta).toBe(0.15);
+  });
+
+  /**
+   * ★ 预算抬高后的正向锁：**90s 之内不得拦，90s 之外必须拦**。
+   *
+   * 前半句锁的是"别把预算偷偷改回小值"（真模型单次往返 10–30s，25s 必然超时）；
+   * 后半句锁的是"抬高预算不等于把闸门改成摆设"。两条一起读才是完整语义。
+   */
+  it('★ 90s 之内放行、超出即拦（抬高预算后闸门仍是活的）', () => {
+    // 一次真模型重排往返的实测上界（30s）之后仍有余量 → 放行。
+    expect(checkGates(budget(), 30_000)).toEqual({ allowed: true });
+    // 恰好等于上限 → 放行（上限语义是"不超过"）。
+    expect(checkGates(budget(), 90_000)).toEqual({ allowed: true });
+    // 超出一毫秒 → MAX_DURATION。
+    expect(checkGates(budget(), 90_001)).toEqual({ allowed: false, reason: 'MAX_DURATION' });
+    // 远超上限 →MAX_DURATION。
+    expect(checkGates(budget(), 180_000)).toEqual({ allowed: false, reason: 'MAX_DURATION' });
   });
 });

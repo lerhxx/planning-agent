@@ -9,8 +9,10 @@
  * ```
  *
  * 根因在 `doReplan` 的时序：从起飞前的 `checkGates` 走到收敛判定，中间只隔了一次
- * `runtime.replan()` —— 真模型这一次调用就要 10–30s，而 `maxDurationMs` 只有 25s。
- * 于是候选计划**刚算好**就被"自己花了时间"打回，自动修复事实上必然失效。
+ * `runtime.replan()` —— 真模型这一次调用就要 10–30s，而当时的 `maxDurationMs` 被定成了
+ * 25s（mock 脚本时代的预算）。于是候选计划**刚算好**就被"自己花了时间"打回，
+ * 自动修复事实上必然失效。闸门预算现已上调（见 `gates.ts`），但下面这条不变量
+ * 与具体数值无关，必须继续成立：**干活花了时间本身不构成丢弃正确结果的理由**。
  *
  * ★ 那两次判定之间 `budget` 一个字段都没被改过（唯一的自增在判定之后），所以旧实现
  *   里那一行事后检查与起飞前那次**逐字等价**、结果必然一致 —— 它只可能因为 `nowMs`
@@ -21,7 +23,7 @@
  * 1. `runtime.replan()` 把假时钟推进到**远超** `maxDurationMs` 之后，这一轮重排
  *    **必须被接受**：`applyReplanOutcome` 生效（版本前进、进入 `running`、新步骤入计划）。
  * 2. 反向锁：同样的超预算条件下，**事前**闸门仍然拦得住（引擎不会无限开新一轮）——
- *    已由 `engineDurationBudget.test.ts`「计划就绪之后再过 26s」覆盖，本文件不重复。
+ *    已由 `engineDurationBudget.test.ts`「计划就绪之后再超上限」覆盖，本文件不重复。
  *
  * ## 为什么用假时钟、为什么注入点选在 `runtime.replan()`
  *
@@ -55,8 +57,15 @@ const STEP_TYPE = 'alpha';
 const TOOL_NAME = 'alpha.probe';
 const START_ISO = '2026-01-01T00:00:00.000Z';
 
-/** 真模型一次重排调用的典型耗时：把 25s 的时长预算顶得远远不够。 */
-const REPLAN_COST_MS = 40_000;
+/**
+ * 注入的重排耗时：**刻意超过** `DEFAULT_GATE_CONFIG.maxDurationMs`（现 90s）。
+ *
+ * ★ 取 100s 而不是真实模型的 10–30s，是为了让"时钟确实被顶过上限"成为可断言的前提
+ *   （见下面 `expect(REPLAN_COST_MS).toBeGreaterThan(...)`）。本用例证明的是
+ *   **不变量**—— 事后判定不复查预算 —— 而不是某个具体预算数值；换成真实模型的
+ *   10–30s 后这条断言就变成了空转（那时根本没超预算，拦不拦都无所谓）。
+ */
+const REPLAN_COST_MS = 100_000;
 
 /** 假时钟：只在被显式推进时前进，其余时刻完全静止。 */
 interface FakeClock {
@@ -168,7 +177,7 @@ function createHarness(options: { replanCostMs: number; mode: ReplanMode }): Har
     async replan(request: ReplanRequest): Promise<PlanDraft> {
       replanCalls += 1;
       lastReplanRequest = request;
-      // ★ 关键注入点：模型调用本身耗时 40s，远超 25s 的时长预算。
+      // ★ 关键注入点：模型调用本身耗时超过时长闸门（100s > 90s）。
       // 这段时间正好落在"起飞前 checkGates"与"事后收敛判定"之间。
       clock.advance(options.replanCostMs);
       return {

@@ -12,7 +12,22 @@ import { createRuntime } from '@/src/core/runtime/factory';
 import { registerAllDomains } from '@/src/domains';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 30;
+/**
+ * ★ 平台侧函数超时（秒）。**必须 ≥ 内核时长闸门 + 规划耗时余量**。
+ *
+ * 父子关系：`maxDuration`（平台，外层，先到即砍）> `DEFAULT_GATE_CONFIG.maxDurationMs`
+ * （内核，内层 90s，跑完再判）+ 首次规划耗时（10–30s）。当前 120 ≥ 90 + 30。
+ *
+ * 30 是 M1 时期为 **mock 同步脚本**定的（= 25s 闸门 + 5s 余量）；内核闸门抬到 90s
+ * 之后它就偏小了，真模型路径上会在内核来得及收尾之前砍断函数。
+ *
+ * ⚠️ 若平台先于内核收尾，客户端拿到的是**一条没有终态事件的断流**（既无 `done`
+ * 也没有 `error`），比内核优雅地以 `MAX_DURATION` 失败更糟 —— 前者无法诊断，
+ * 后者至少有终态原因。
+ *
+ * ⚠️ 它同时受所选部署平台的函数超时上限约束，调整前请确认目标套餐的上限。
+ */
+export const maxDuration = 120;
 
 const sleep = async (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));

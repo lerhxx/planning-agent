@@ -1,12 +1,12 @@
 /**
  * 时长预算的起算点：**计划就绪**，而不是整轮开始。
  *
- * ★ 为什么要专门测这个：真模型的首次 `createPlan` 本身就要 10–30s，而
- * `DEFAULT_GATE_CONFIG.maxDurationMs = 25_000` 一旦从整轮开始起算，
- * 等计划回来时预算已经被规划吃光 —— 任何一次校验失败都必然以`MAX_DURATION` 收场，
+ * ★ 为什么要专门测这个：真模型的首次 `createPlan` 本身就要 10–30s，若
+ * `DEFAULT_GATE_CONFIG.maxDurationMs`（现90_000）从整轮开始起算，等计划回来时预算
+ * 可能已经被规划吃光—— 任何一次校验失败都必然以 `MAX_DURATION` 收场，
  * 自动修复事实上已经死了。
  *
- * ★ 本文件用**假时钟**精确模拟"规划花了 40 秒、之后时间静止"，不真的等待。
+ * ★ 本文件用**假时钟**精确模拟"规划花了 100 秒、之后时间静止"，不真的等待。
  * `runGoal(input, deps)` 的 `deps.now` / `deps.sleep` 都是注入点，因此：
  * 推进时钟的唯一手段是"在某个被引擎调用的回调里推进"，本文件用两处：
  *  1. `runtime.plan()` —— 模拟真模型首次规划的真实耗时（这是**唯一**合理的注入点：
@@ -44,8 +44,15 @@ const STEP_TYPE = 'alpha';
 const START_ISO = '2026-01-01T00:00:00.000Z';
 const START_MS = new Date(START_ISO).getTime();
 
-/** 真模型首次规划的典型耗时：比 25s 的闸门还长。 */
-const PLANNING_COST_MS = 40_000;
+/**
+ * 真模型首次规划的典型耗时。
+ *
+ * ★ 刻意取 100s（**超过**当前 90s 的闸门），而不是真实的 10–30s：本文件要证明的是
+ *   "规划耗时被排除在时长预算之外"（起算点= 计划就绪）。只有当规划耗时**独自就超过**
+ *   闸门上限时，"重排没有被 MAX_DURATION 拒掉"才真正证明起算点换对了 —— 若规划只花
+ *   40s，即便起算点仍写成整轮开始，这条也会侥幸通过，变成空转的断言。
+ */
+const PLANNING_COST_MS = 100_000;
 
 /** 假时钟：只在被显式推进时前进，其余时刻完全静止。 */
 interface FakeClock {
@@ -221,14 +228,14 @@ describe('时长预算从计划就绪起算', () => {
     clearDomainPacks();
   });
 
-  it('★ 规划耗掉 40s 之后触发重排，不会被 MAX_DURATION 拒掉', async () => {
+  it('★ 规划耗掉 100s（超过闸门上限）之后触发重排，不会被 MAX_DURATION 拒掉', async () => {
     const harness = createHarness({ initialPlanValid: false });
     const registered = registerDomainPack(harness.domain.pack);
     expect(registered.ok).toBe(true);
 
     const result = await harness.run();
 
-    // 前提：这一轮真的先规划了 40s（假时钟已越过25s 闸门长度）。
+    // 前提：这一轮真的先规划了 100s（假时钟已越过 90s 闸门长度）。
     expect(harness.clock.currentMs() - START_MS).toBe(PLANNING_COST_MS);
     // 前提：真的走进了"校验不通过 → 重排"这条主路径（否则断言会空转）。
     expect(harness.domain.validateCalls()).toBeGreaterThan(0);
@@ -245,12 +252,15 @@ describe('时长预算从计划就绪起算', () => {
     ).toBe(false);
   });
 
-  it('计划就绪之后再过 26s，执行循环仍然以 MAX_DURATION 失败', async () => {
+  it('计划就绪之后再超上限（>90s），执行循环仍然以 MAX_DURATION 失败', async () => {
     const harness = createHarness({ initialPlanValid: true });
     const registered = registerDomainPack(harness.domain.pack);
     expect(registered.ok).toBe(true);
 
-    const result = await harness.run({ advanceAfterPlanReadyMs: 26_000 });
+    // 取「上限 +1ms」而不是某个魔数：与闸门上限保持联动，改预算时这条依然有效。
+    const result = await harness.run({
+      advanceAfterPlanReadyMs: DEFAULT_GATE_CONFIG.maxDurationMs + 1,
+    });
 
     // 闸门没被改成摆设：计划就绪之后超预算，一样拦下来。
     expect(result.status).toBe('failed');
@@ -276,7 +286,7 @@ describe('时长预算从计划就绪起算', () => {
     expect(ctx.deadlineAt).toBe(new Date(expectedDeadlineMs).toISOString());
 
     // 不是"已经过去"：重排被调用时deadline 还在未来。
-    // （旧口径算出来的 deadline 会是 START+25s，即计划就绪前 15s —— 已过期。）
+    // （旧口径算出来的 deadline 会是 START+maxDurationMs，即计划就绪前 10s —— 已过期。）
     expect(new Date(ctx.deadlineAt).getTime()).toBeGreaterThan(harness.clock.currentMs());
 
     // `startedAt` 仍记录真实起点：闸门改口径不等于篡改事实。
