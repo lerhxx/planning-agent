@@ -17,7 +17,7 @@
  *   要验证闸门请用 MockRuntime。
  */
 import { createTool, noopObserve } from '@mastra/core/tools';
-import { getTool } from '@/src/core/registry/domainRegistry';
+import { getTool, getToolBriefs } from '@/src/core/registry/domainRegistry';
 import type {
   PlanDraft,
   PlanRequest,
@@ -95,11 +95,26 @@ export function createMastraRuntime(options: MastraRuntimeOptions = {}): Runtime
   return {
     id: 'mastra',
 
+    /*
+     * ★ 两个方法都在这里**补齐工具清单**（`{ ...request, tools: … }`），而不是只靠调用方传。
+     *
+     * 理由：prompt 的硬性约束要求模型"只能用清单里的 toolName"，而清单此前
+     * 既不在请求里、也没被渲染 —— 模型只能猜，猜错就撞上`工具未在当前领域注册`。
+     * 只在 `createPlan` 里装配是不够的：**重排请求是由编排层 `src/core/run/engine.ts`
+     * 直接组装的**，那条路径不经过 `createPlan`。若只补 plan 不补 replan，
+     * 重排 prompt 就会拿到空清单，而空清单会被渲染成"所有 intent 必须为 null"——
+     * 那比原bug 更糟（模型被明确指示放弃工具调用）。
+     *
+     * `RunContext.domainId` 在这里可信（内核自己填的），所以就地按它取清单，
+     * 与 `runTool` 用 `ctx.domainId` 查工具是同一个领域口径。
+     * 覆盖而不是"仅在为空时填"：调用方若传了**过期或别处**的清单，
+     * 静默沿用它等于把同一个 bug 换个入口再犯一次。
+     */
     plan: (request: PlanRequest, ctx: RunContext): Promise<PlanDraft> =>
-      draft(() => planner.plan(request), ctx),
+      draft(() => planner.plan({ ...request, tools: getToolBriefs(ctx.domainId) }), ctx),
 
     replan: (request: ReplanRequest, ctx: RunContext): Promise<PlanDraft> =>
-      draft(() => planner.replan(request), ctx),
+      draft(() => planner.replan({ ...request, tools: getToolBriefs(ctx.domainId) }), ctx),
 
     /**
      * 执行单个领域工具。

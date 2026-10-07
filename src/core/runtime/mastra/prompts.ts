@@ -24,6 +24,13 @@
  *
  * 结论：`renderOutputShape()` / `idContract()` / `producesFactsContract()` 三段
  * 都是**硬契约，不是修辞**：少任何一条，模型都会稳定地掉回同一个坑。
+ *
+ * ★ 工具清单：见下方 `renderTools()`。这是**同一个 bug 家族的第六个成员**：
+ *   `commonRules()` 一直写着"只能使用下方『可用工具』里列出的 toolName"，
+ *   而这个"可用工具"章节**从来没有被渲染过**，`PlanRequest` 里也没有 `tools` 字段——
+ *   契约声称提供了某项信息，实际没提供，模型于是只能凭语义猜工具名
+ *   （把一个领域概念自行拼成"名.动作"的形状），猜错就撞上 `工具未在当前领域注册`，
+ *   四个步骤全失败、耗尽重排次数。Mock 因为回放模板从不需要这个清单，一直是绿的。
  */
 import type { PlanRequest, ReplanRequest } from '@/src/core/runtime/adapter';
 
@@ -32,12 +39,17 @@ function commonRules(): string {
   return [
     '## 硬性约束',
     '1. 只能使用下方"可用步骤类型"里列出的 type，不得自造。',
-    '2. 只能使用下方"可用工具"里列出的 toolName。',
-    '3. dependsOn 只能引用同一个方案中出现过的步骤 id；不得引用不存在的 id。',
-    '4. 不得输出任何未在上文出现的具体事实数值（价格、评分、耗时、距离等）。',
+    // ★ 这一条现在**有**对应的章节了（`renderTools()` 在两个 prompt 里都渲染）。
+    //   措辞与渲染保持一致：章节标题是"可用工具"，字段名是 `toolName`。
+    '2. 只能使用下方"可用工具"里列出的 toolName：必须与清单里的 name 逐字相同，',
+    '   不得改写大小写、不得替换分隔符、不得拼接或省略任何字符。',
+    '3. "可用工具"清单为空（或显示为"（无）"）时，所有步骤的 intent 都必须设为 null：',
+    '   此时不存在任何你可以调用的工具。',
+    '4. dependsOn 只能引用同一个方案中出现过的步骤 id；不得引用不存在的 id。',
+    '5. 不得输出任何未在上文出现的具体事实数值（价格、评分、耗时、距离等）。',
     '   事实只能由工具在执行阶段返回；你只负责编排顺序与依赖。',
-    '5. 除非确有把握，纯推理步骤（intent 为 null）优于编造工具调用。',
-    '6. 输出必须严格符合给定的 JSON 结构，不要包裹在解释性文字或代码块里。',
+    '6. 除非确有把握，纯推理步骤（intent 为 null）优于编造工具调用。',
+    '7. 输出必须严格符合给定的 JSON 结构，不要包裹在解释性文字或代码块里。',
   ].join('\n');
 }
 
@@ -124,6 +136,52 @@ function renderStepTypes(request: PlanRequest | ReplanRequest): string {
   return ['## 可用步骤类型', ...(lines.length > 0 ? lines : ['- （无）'])].join('\n');
 }
 
+/**
+ * ★ 把领域**真实注册**的工具清单渲染成 prompt 片段（规划与重规划共用）。
+ *
+ * ## 为什么这是硬契约而不是可选项
+ *
+ * `commonRules()` 要求"只能使用本节列出的 toolName"，而模型写 `toolName` 时
+ * 除了这里**没有任何其它途径**知道有哪些工具。没有这一节，它只能猜——
+ * 猜错的后果不是一次校验失败，而是每一次工具调用都返回 `工具未在当前领域注册`，
+ * 步骤重试到上限全失败，最后以「重排耗尽」收场：用户看到的错误与真实病因完全无关。
+ *
+ * ## 两种"没有工具"必须可区分
+ *
+ * ① 清单为空数组 = 领域确实没注册工具；
+ * ② 清单为 `undefined` = **调用方没传**（字段是 optional，权威来源是注册表）。
+ * ② 恰恰是本次故障的形态，若也渲染成空清单，模型就会读成"这个领域没有工具"、
+ * 放弃全部工具调用，而且**没有任何迹象**表明真正原因是漏传。
+ * 所以两种情况给两句不同的话，各自都带处置指令。
+ *
+ * ## 顺序
+ *
+ * 清单顺序由 `adapter.ts` 的 `ToolBrief[]` 决定，内核那边已按注册名字典序排好
+ * （见 `domainRegistry.ts` 的 `getTools`）—— prompt 不重排，避免同一份注册表
+ * 在两次渲染间给出不同顺序。
+ */
+function renderTools(request: PlanRequest | ReplanRequest): string {
+  const tools = request.tools;
+  if (!tools) {
+    return [
+      '## 可用工具',
+      '- （本次请求未携带工具清单。你无法得知有哪些工具可用，',
+      '   因此不得写出任何 intent：所有步骤的 intent 一律设为 null。）',
+    ].join('\n');
+  }
+  if (tools.length === 0) {
+    return [
+      '## 可用工具',
+      '- （无）—— 当前领域没有注册任何工具，因此**所有步骤的 intent 都必须设为 null**。',
+    ].join('\n');
+  }
+  const lines = tools.map(
+    (tool) =>
+      `- name="${tool.name}" | 说明="${tool.description}" | 最多尝试 ${tool.maxAttempts} 次`,
+  );
+  return ['## 可用工具', ...lines].join('\n');
+}
+
 /** 规划 prompt。 */
 export function planSystemPrompt(request: PlanRequest): string {
   const templates = request.templates.map(
@@ -139,6 +197,8 @@ export function planSystemPrompt(request: PlanRequest): string {
     `## 输入信号\n${request.signals.length > 0 ? request.signals.join('、') : '(无)'}`,
     '',
     renderStepTypes(request),
+    '',
+    renderTools(request),
     '',
     ['## 可用模板', ...(templates.length > 0 ? templates : ['- （无）'])].join('\n'),
     '',
@@ -170,6 +230,10 @@ export function replanSystemPrompt(request: ReplanRequest): string {
     ['## 必须保留的步骤（不得删除、不得改 id）', ...(retained.length > 0 ? retained : ['- （无）'])].join('\n'),
     '',
     renderStepTypes(request),
+    '',
+    // ★ 重排同样要看到真实工具清单：这一步换掉的就是"调工具的那几步"，
+    //   拿不到清单就等于让它凭空重发一个同样不存在的工具名。
+    renderTools(request),
     '',
     commonRules(),
     '',

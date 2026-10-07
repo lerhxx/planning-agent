@@ -100,6 +100,10 @@ describe('MastraRuntime（方案 A：内核接口不变）', () => {
       {
         goal: makeGoal(),
         stepTypes: [],
+        // ★ 与 `createPlan` 同形：工具清单是请求的一等字段。
+        //   这里的 runtime 实现会用注册表覆盖它（见 `mastra/index.ts`），
+        //   但仍显式传一份，避免"字段必填"这件事在测试里被悄悄绕过。
+        tools: [],
         templates: [],
         signals: ['text'],
         revision: 1,
@@ -122,6 +126,7 @@ describe('MastraRuntime（方案 A：内核接口不变）', () => {
         {
           goal: makeGoal(),
           stepTypes: [],
+          tools: [],
           templates: [],
           signals: ['text'],
           revision: 1,
@@ -138,6 +143,7 @@ describe('MastraRuntime（方案 A：内核接口不变）', () => {
         {
           goal: makeGoal(),
           stepTypes: [],
+          tools: [],
           templates: [],
           signals: ['text'],
           revision: 1,

@@ -18,7 +18,13 @@ import {
 } from '@/shared/plan/types';
 import type { RunContext } from '@/shared/run/types';
 import { zPlanDraft, type PlanDraft, type RuntimeAdapter } from '@/src/core/runtime/adapter';
-import { getDomainPack, getStepType, getTemplates } from '@/src/core/registry/domainRegistry';
+import {
+  getDomainPack,
+  getStepType,
+  getTemplates,
+  getToolBriefs,
+  getToolNames,
+} from '@/src/core/registry/domainRegistry';
 
 export interface PlannerDeps {
   runtime: RuntimeAdapter;
@@ -56,6 +62,12 @@ export async function createPlan(input: CreatePlanInput, deps: PlannerDeps): Pro
     {
       goal: input.goal,
       stepTypes: pack.planning.stepTypes,
+      // ★ 把领域真实注册的工具清单交给 runtime —— prompt 的硬性约束要求模型
+      // "只能使用清单里列出的 toolName"，而这份清单以前**压根没进请求**，
+      // 模型只能猜名字，猜错就撞上 `工具未在当前领域注册`。
+      // runtime 也会按 `ctx.domainId` 覆盖它（以注册表为准），这里填是为了
+      // 让请求自身就是完整的 —— 换掉 runtime 时不必依赖那份覆盖。
+      tools: getToolBriefs(input.domainId),
       templates: getTemplates(input.domainId),
       signals: input.signals ?? input.ctx.signals,
       revision,
@@ -85,6 +97,9 @@ export async function createPlan(input: CreatePlanInput, deps: PlannerDeps): Pro
     goalSummary: input.goal.summary,
     validateType: (type) => getStepType(input.domainId, type) !== undefined,
     maxAttemptsFor: (type) => getStepType(input.domainId, type)?.maxAttempts ?? 2,
+    // ★ 首次规划同样要校验工具名：模型拿到的清单里有它猜不到的名字就照抄，
+    //   但它仍可能改写大小写 / 换分隔符 / 沿用别的领域的写法。
+    allowedToolNames: getToolNames(input.domainId),
   });
 
   if (!steps.ok) return { ok: false, error: steps.error };
@@ -124,6 +139,15 @@ export interface BuildStepsOptions {
   /** step.type 是否在领域白名单内。 */
   validateType?: (type: string) => boolean;
   maxAttemptsFor?: (type: string) => number;
+  /**
+   * ★ 合法工具名集合（该领域注册过的全集）。给出即启用 `intent.toolName` 校验。
+   *
+   * 缺省**不校验**（`undefined`），这样纯函数单测与不关心工具的调用方不必被绑死；
+   * 但两条真实路径（`createPlan` / `applyReplanDraft`）都必须传入 ——
+   * 漏传就等于把非法工具名放行到执行期，让它在 `runTool` 里变成一句
+   * `工具未在当前领域注册`，再靠重排次数兜底。
+   */
+  allowedToolNames?: readonly string[];
   /** 自定义 id 生成（重规划时用带 revision 的 id）。 */
   makeId?: (index: number, draft: StepDraft) => string;
   originFor?: (index: number, draft: StepDraft) => Step['origin'];
@@ -177,12 +201,16 @@ function injectGoalSummary(draft: StepDraft, goalSummary: string | undefined): S
 /** `detail` 里最多列几条悬空引用 —— 再多就刷屏了，够定位即可。 */
 const MAX_DANGLING_DETAIL = 5;
 
+/** `detail` 里最多列几个合法工具名 —— 够模型对照改名即可，全集可能很长。 */
+const MAX_TOOL_NAME_DETAIL = 8;
+
 /**
  * 草稿 → Step（补齐运行态字段）。纯函数。
  *
- * 两处拒绝点，都返回内核通用错误码 `PLAN_GENERATION_FAILED`：
+ * 三处拒绝点，都返回内核通用错误码 `PLAN_GENERATION_FAILED`：
  * 1. 步骤类型不在白名单内；
- * 2. ★ `dependsOn` 指向了不存在的步骤 id（悬空引用）。
+ * 2. ★ `dependsOn` 指向了不存在的步骤 id（悬空引用）；
+ * 3. ★ `intent.toolName` 不是该领域注册过的工具名。
  *
  * ★ 为什么必须在**这里**就查悬空引用（红线 2：模型产出是不可信输入）：
  * 悬空引用一旦静默写进 `Plan`，就再没有人知道它是"模型写错了 id"——
@@ -192,6 +220,12 @@ const MAX_DANGLING_DETAIL = 5;
  *   - 重排路径上，`buildSteps` 的失败会被 `applyReplanDraft` 折叠成"这一步没生成"，
  *     表现为一轮说不清原因的重排空转，而不是一条能指回模型的诊断。
  * 因此在这里就把它挡掉，并标 `retryable: true` —— 重新采样一次模型很可能就对了。
+ *
+ * ★ 同理，`intent.toolName` 写错也必须在这里挡掉（`allowedToolNames` 给出时才启用）：
+ * 放行到执行期的代价是每一次工具调用都返回 `工具未在当前领域注册`，
+ * 步骤重试到上限仍然全失败，最终以「重排耗尽」的形式收场——
+ * 用户看到的是一句与真实病因（工具名不存在）完全无关的错误。
+ * 在这里挡掉，用户第一次就看到"工具名 xxx 不存在，合法的是这几个"。
  */
 export function buildSteps(
   draft: PlanDraft,
@@ -200,6 +234,7 @@ export function buildSteps(
   const now = options.now ?? (() => new Date());
   const iso = now().toISOString();
   const steps: Step[] = [];
+  const allowedToolNames = options.allowedToolNames;
 
   for (let index = 0; index < draft.steps.length; index += 1) {
     const item = draft.steps[index];
@@ -211,6 +246,26 @@ export function buildSteps(
           message: '步骤类型不在领域白名单内',
           retryable: false,
           detail: { type: item.type },
+        },
+      };
+    }
+    // ★ 纯推理步骤（`intent: null`）不参与工具名校验：它根本不调工具。
+    //   不排除它的话，所有不带工具调用的步骤都会被误判为非法。
+    if (allowedToolNames && item.intent && !allowedToolNames.includes(item.intent.toolName)) {
+      return {
+        ok: false,
+        error: {
+          code: 'PLAN_GENERATION_FAILED',
+          message: '步骤引用了当前领域未注册的工具',
+          retryable: true,
+          detail: {
+            stepId: item.id ?? makeStepId(index),
+            toolName: item.intent.toolName,
+            // ★ 必须把合法名字**回传**：模型需要知道该改成什么，
+            //   否则重采样一次仍然是猜 —— 只是把同一个错误推迟一轮。
+            allowedToolNames: allowedToolNames.slice(0, MAX_TOOL_NAME_DETAIL),
+            totalAllowed: allowedToolNames.length,
+          },
         },
       };
     }
@@ -273,9 +328,13 @@ export function buildSteps(
  *
  * ★ 已完成步骤不进入 `impactedIds`，因此它们的 id 与状态原样保留（红线 14）。
  *
- * ★ 草稿构建失败（类型越界 / `dependsOn` 悬空）时**不会**把新步骤整批丢掉 ——
+ * ★ 草稿构建失败（类型越界 / `dependsOn` 悬空 / 工具名未注册）时**不会**把新步骤整批丢掉 ——
  * 那等于静默删除受影响步骤。此时保留原有步骤，本轮重排退化成空操作，
  * 由上层闸门与重排次数去收敛；具体原因通过 `onReject` 交给调用方上报。
+ *
+ * ★ 代价要知道：这条路径的失败**不会**让整轮运行立刻失败，只是浪费一轮重排。
+ * 所以工具名未注册必须在这之前就尽量少发生 —— 靠的是 prompt 里那份真实清单
+ * （`adapter.ts` 的 `PlanRequest.tools` / `ReplanRequest.tools`）。
  */
 export function applyReplanDraft(input: {
   plan: Plan;
@@ -309,6 +368,11 @@ export function applyReplanDraft(input: {
     makeId: input.makeId,
     // ★ 保留步骤（含已完成步骤）仍留在计划里，新步骤引用它们的 id 是合法的，必须放行。
     allowRefs: remain.map((step) => step.id),
+    // ★ 重排生成的新步骤**同样**要过工具名校验，合法集合就是该领域注册的工具全集。
+    //   不校验的话，"模型换了个同样不存在的工具名"会静默通过 buildSteps，
+    //   然后在执行期重演同一个错误 —— 而收敛判定只看步骤差异(delta)，
+    //   察觉不到"新步骤用的是另一个不存在的工具"。
+    allowedToolNames: getToolNames(input.plan.domainId),
     originFor: (index, _draft) => ({
       kind: 'replan' as const,
       revision: input.revision,
