@@ -155,6 +155,10 @@ export function resumePlan(
 export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<EngineResult> {
   const now = deps.now ?? (() => new Date());
   const sleep = deps.sleep ?? NOOP_SLEEP;
+  /**
+   * ★ 整轮开始的时刻 —— **只用于记账，不用于时长闸门**。
+   * 见下面 `planReadyMs` 的注释：闸门度量的是"计划产出之后还剩多少可用时间"。
+   */
   const startedMs = now().getTime();
 
   const runId = makeId('run');
@@ -291,7 +295,9 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
     goalId: goal.id,
     domainId,
     revision: 1,
-    startedAt: now().toISOString(),
+    startedAt: new Date(startedMs).toISOString(),
+    // 这里的 deadlineAt 只是**占位**：真正的建计划调用（`createPlan`）发生在它之后，
+    // 等计划就绪后会按 `planReadyMs` 重新赋值（见下方注释）。
     deadlineAt: new Date(startedMs + DEFAULT_GATE_CONFIG.maxDurationMs).toISOString(),
     budgetRemainingCNY: DEFAULT_GATE_CONFIG.maxCostCNY,
     // signals 由附件种类派生（不再是写死的常量）。
@@ -327,6 +333,28 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
     plan = created.plan;
   }
 
+  /**
+   * ★★ 时长预算的起算点：**计划就绪**时刻，不是整轮开始时刻。
+   *
+   * 为什么必须是两个不同的时刻：
+   * - `ctx.startedAt`（= `startedMs`）**记录事实** —— 这一轮是什么时候开始的，
+   *   用于上报、追溯、算总耗时。它必须忠实于真实起点，不能被挪动。
+   * - 时长闸门（`maxDurationMs`）度量的是**"计划产出之后还剩多少可用时间"** ——
+   *   它是留给"执行 + 自动修复（重排）"的作业窗口。
+   *
+   * 之前两者都从整轮开始起算，于是：真模型的首次 `createPlan` 本身就要 10–30s，
+   * 等计划回来时 25s 的预算已经被规划吃光（甚至 `ctx.deadlineAt` 已经变成过去时刻），
+   * 任何一次校验失败都必然以`MAX_DURATION` 收场 —— 自动修复事实上已经死了。
+   *
+   * 因此从这一刻起重新起算，并把 `ctx.deadlineAt` 一并顺延（`ctx` 是 `let`，可直接重赋值）。
+   * 注意 `startedAt` 仍然保留真实的整轮起点：闸门量的是剩余可用时间，不是总耗时。
+   */
+  const planReadyMs = now().getTime();
+  ctx = {
+    ...ctx,
+    deadlineAt: new Date(planReadyMs + DEFAULT_GATE_CONFIG.maxDurationMs).toISOString(),
+  };
+
   deps.emit({
     type: 'plan_start',
     planId: plan.id,
@@ -347,7 +375,8 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
   const budget: ReplanBudget = {
     replanCount: 0,
     costCNY: 0,
-    startedAtMs: startedMs,
+    // 起算点 = 计划就绪（见 planReadyMs 处的注释），不是整轮开始。
+    startedAtMs: planReadyMs,
   };
 
   const execDeps = () => ({
@@ -609,7 +638,8 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
       deps.emit({ type: 'plan_status', planId: plan.id, status: 'paused', revision: plan.revision });
       return finish('paused', plan, 'USER_ABORTED');
     }
-    if (now().getTime() - startedMs > DEFAULT_GATE_CONFIG.maxDurationMs) {
+    // 闸门从**计划就绪**起算（不是整轮开始）：给执行与自动修复留出完整窗口。
+    if (now().getTime() - planReadyMs > DEFAULT_GATE_CONFIG.maxDurationMs) {
       return failRun(plan, describeGateReason('MAX_DURATION'), 'MAX_DURATION');
     }
     if ((guard += 1) > 500) break;
