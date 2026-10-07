@@ -31,9 +31,10 @@
  *    `src/core/**` 与 `shared/**` 只认"槽位"，不认内容（破 0 判据 `v2IndependentVerify` 会扫）。
  *
  * 答完之后值怎么真正影响产出：见 `applyAnswers` 的注释 —— 关键是把答案**同时**写进
- * `goal.constraints` / `goal.resources` 和 `goal.raw + summary`，因为
- * `MockRuntime` 把 `goal.summary` 当作 `goalSummary` 灌进每个工具的入参
- * （`src/core/runtime/mock/script.ts:97`），而 `parseTripBrief` 是**从文本里**读口径的。
+ * `goal.constraints` / `goal.resources` 和 `goal.raw + summary`，因为内核在
+ * `buildSteps`（`src/core/planning/planner.ts` 的 `injectGoalSummary`）里会把
+ * `goal.summary` 当作 `goalSummary` 灌进**每个**工具的入参 —— 无论草稿来自模板回放
+ * 还是真模型 —— 而 `parseTripBrief` 是**从文本里**读口径的。
  * 只写约束不补文本 ⇒ 工具侧照样读不到 ⇒ "看起来答了，实际没生效"，同样是静默失败。
  */
 import { makeFormKey, type ClarifyField, type ClarifyQuestion, type Goal, type GoalConstraint } from '@/shared/plan/types';
@@ -178,8 +179,9 @@ export function buildGoalBriefFields(brief: TripBrief): ClarifyField[] {
  * 把 `goal` 的原文**补全成一句领域可解析的口径**。
  *
  * ★ 这是"答案被真正消费"里最容易被漏掉、也最要命的一环。
- * 引擎把 `goal.summary` 当 `goalSummary` 灌进每个工具的入参
- * （`script.ts:97`），而 `parseTripBrief` **只从文本里**读城市 / 天数 / 预算。
+ * 内核在 `buildSteps`（`src/core/planning/planner.ts` 的 `injectGoalSummary`）里把
+ * `goal.summary` 当 `goalSummary` 灌进每个工具的入参，
+ * 而 `parseTripBrief` **只从文本里**读城市 / 天数 / 预算。
  * 所以只往 `goal.constraints` 里塞值是不够的 —— 工具侧读不到，
  * 于是表现为"用户明明填了表单，产出的行程却还是老样子"，且不报错。
  *
