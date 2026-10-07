@@ -10,13 +10,20 @@
  *   `SOURCE_MISSING` 硬检查才是强制点。prompt 只是让模型少犯错，
  *   闸门负责"模型仍然编了"的情况。两者不可互相替代。
  *
- * ★ 步骤 id 契约（本次修复点）：`StepDraft.id` 在 schema 里是**可选**的
- *   （`shared/plan/types.ts` 的 `zStepDraft`），省略时内核按数组下标回落成
- *   `s-1` / `s-2` / …。旧版 prompt 只渲染了形状、没渲染 `id`，
- *   模型就无从知道"id 是自己要写的"，于是产出空 `dependsOn` 或引用未声明的 id，
- *   草案在编译前的依赖检查阶段被整包拒掉。
- *   因此下面 `renderOutputShape()` + `idContract()` 这两段是**硬契约，不是修辞**：
- *   少任何一条，模型都会重新掉回悬空依赖。
+ * ★ 步骤 id 契约：见下方 `idContract()`（`StepDraft.id` 在 schema 里是**可选**的，
+ *   省略时内核按数组下标回落成 `s-1` / `s-2` / …，模型不写就无从引用）。
+ *   旧版 prompt 只渲染了形状、没渲染 `id`，模型就不知道"id 是自己要写的"，
+ *   于是产出空 `dependsOn` 或引用未声明的 id，草案在编译前的依赖检查阶段被整包拒掉。
+ *
+ * ★ `producesFacts` 契约：见下方 `producesFactsContract()`。这一段是**同类的第二次犯病**：
+ *   同一个 `intent` 形状里，字段**名字**被渲染了但**类型与含义**没渲染，
+ *   模型于是把 `producesFacts` 理解成"这一步会产出这些"，回了一个**数组**；
+ *   而 `zStepIntent.producesFacts` 是 `z.boolean()`（`shared/plan/types.ts`），
+ *   于是 `parsePlanDraft` 抛 `PROVIDER_VALIDATION_FAILED`，**整轮计划直接作废**。
+ *   少写类型，模型就会自己发明类型 —— 渲染形状时**每个字段都必须带类型**。
+ *
+ * 结论：`renderOutputShape()` / `idContract()` / `producesFactsContract()` 三段
+ * 都是**硬契约，不是修辞**：少任何一条，模型都会稳定地掉回同一个坑。
  */
 import type { PlanRequest, ReplanRequest } from '@/src/core/runtime/adapter';
 
@@ -40,14 +47,22 @@ function commonRules(): string {
  * 没展开 `StepDraft`，模型拿到的契约就是残缺的）。
  *
  * ★ `id` 必须出现在这里：`zStepDraft.id` 是可选字段，不渲染模型就不知道它能写。
+ *
+ * ★★ `intent` 的三个字段**都要带类型**（本轮修复点）：此前这一行只写了
+ *   `intent: { toolName, input, producesFacts } | null` —— 有名字、没类型。
+ *   模型于是把 `producesFacts` 当成"这一步会产出这些"，回了一个数组，
+ *   而 schema 要求 `boolean`，整轮计划在解析阶段被拒。
+ *   只写 `estimate?: { durationMs, costCNY, confidence }` 是同一个毛病的残留，
+ *   一并补上类型。
  */
 function renderOutputShape(): string {
   return [
     '## 输出结构',
     '{ "summary": string, "steps": StepDraft[] }',
     'StepDraft = { id?: string, type: string, title: string, description?: string, dependsOn: string[],',
-    '              parallelGroup?: string, intent: { toolName, input, producesFacts } | null,',
-    '              estimate?: { durationMs, costCNY, confidence } }',
+    '              parallelGroup?: string,',
+    '              intent: { toolName: string, input: object, producesFacts: boolean } | null,',
+    '              estimate?: { durationMs: number, costCNY: number, confidence: number } }',
   ].join('\n');
 }
 
@@ -68,6 +83,35 @@ function idContract(): string {
     '3. `dependsOn` 只能写**本方案内你已经声明过的步骤 `id`**：',
     '   不得写数组下标、不得写步骤标题、不得写步骤类型名。',
     '4. 若某步骤需要消费前面步骤的产出，**必须**把这些步骤的 id 写进 `dependsOn`，不得留空数组。',
+  ].join('\n');
+}
+
+/**
+ * `intent.producesFacts` 的契约（硬约束；规划与重规划共用，与 `idContract()` 同级）。
+ *
+ * ★ 为什么必须显式写：真模型路径上出现过一次确定性失败 —— 模型把 `producesFacts`
+ *   填成**数组**（读成"这一步会产出这些"），而 `zStepIntent.producesFacts` 是
+ *   `z.boolean()`，于是 `parsePlanDraft` 抛校验失败，**整轮计划作废**。
+ *   prompt 只给了字段名、没给类型和含义，模型就自己发明了类型。
+ *
+ * ★ 三条一条都不能省：
+ *   ① 它是**布尔值**，不是数组、不是字符串、不是数字；
+ *   ② 语义是"这一步的产出**算不算事实**"（算事实就必须带来源引用），
+ *      而不是"这一步会产出什么"——后者是数组的读法，正是这次翻车的根因；
+ *   ③ 拿不准就填 `false`：填错成数组会让整轮计划直接作废，而 `false` 只是少标一次。
+ *
+ * ★ 真正的闸门不在 prompt（红线 16）：`src/core/execution/observer.ts` 里
+ *   `SOURCE_MISSING` 的硬检查才是强制点。这里只是把模型的默认猜测掰到正确一侧。
+ */
+function producesFactsContract(): string {
+  return [
+    '## intent.producesFacts 的契约',
+    '1. `producesFacts` 的类型是**布尔值**（`true` / `false`）：',
+    '   不是数组、不是字符串、不是数字。它只回答"是/否"，不回答"是什么"。',
+    '2. 只有当这一步工具的产出会被当作**事实**（因而必须携带来源引用）时才填 `true`；',
+    '   纯推理步骤填 `false`，或者把 `intent` 整体设为 `null`。',
+    '3. 不确定就填 `false`：漏标 `true` 只是少一次来源校验，',
+    '   填成数组则会让整轮计划**直接作废**。',
   ].join('\n');
 }
 
@@ -103,6 +147,8 @@ export function planSystemPrompt(request: PlanRequest): string {
     renderOutputShape(),
     '',
     idContract(),
+    '',
+    producesFactsContract(),
   ].join('\n');
 }
 
@@ -137,8 +183,12 @@ export function replanSystemPrompt(request: ReplanRequest): string {
     renderOutputShape(),
     '',
     idContract(),
-    '',
+    // ★ 下面第 5 条是重规划对 idContract 的补充说明（解释"本方案内"的例外）。
+    //   producesFactsContract() 放在**最后**，是为了让该契约段落在两个 prompt 里
+    //   都是同一段末尾文本 —— `prompts.test.ts` 断言两处逐字同源。
     '5. 重规划时，"本方案内已声明的步骤"包含两类：上方"必须保留的步骤"的 id，',
     '   以及你本次新声明的步骤 id —— 两者都可以写进 `dependsOn`。',
+    '',
+    producesFactsContract(),
   ].join('\n');
 }
