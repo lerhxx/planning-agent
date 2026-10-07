@@ -8,6 +8,10 @@
  * | 单轮时长   | ≤ 25s |
  *
  * **收敛判定**：新旧计划 delta < 0.15 → 判定为原地打转，**强制转人工**。
+ *
+ * ★ 两者语义不同，职责不同，见下面各自的不变式注释：
+ *   - `checkGates` —— **事前**：现在还该不该开始新一轮重排（唯一职责）。
+ *   - `judgeConvergence` —— **事后**：这一轮重排的结果有没有实质变化（唯一职责）。
  */
 import { z } from 'zod';
 import { stepSignature, type Plan, type Step } from '@/shared/plan/types';
@@ -41,7 +45,14 @@ export type GateReason = z.infer<typeof zGateReason>;
 export type GateOutcome = { allowed: true } | { allowed: false; reason: GateReason };
 
 /**
- * 检查是否还允许再来一轮重规划。**每次重规划前必须调用**（红线 17）。
+ * ★ 事前闸门：检查是否**还允许开始新一轮**重规划。**每轮重排起飞前必须调用**（红线 17）。
+ *
+ * 三个上限约束的都是**未来的工作量**（还要再跑几轮、还要再花多少钱、还剩多少时间），
+ * 所以它们只有在"还没开始"这个时点上问才有意义 —— 拦住的是"不要再开了"，
+ * 而不是"把已经开完的那一轮扔掉"。
+ *
+ * ⚠️ 事后**不要**再复查本函数：那钱已经付了、时间已经花了，拦下来也退不回去，
+ * 只会把正确的结果丢掉。事后唯一有意义的判断是收敛判定，见 `judgeConvergence`。
  */
 export function checkGates(
   budget: ReplanBudget,
@@ -109,18 +120,34 @@ export function isStagnant(delta: number, config: GateConfig = DEFAULT_GATE_CONF
 }
 
 /**
- * 收敛判定：把「闸门」与「delta」合起来判断这一轮能不能继续。
- * 顺序：先闸门（硬约束），再收敛（软约束）。
+ * ★ 事后判定（收敛）：这一轮重排**算出来的计划有没有实质变化**。
+ *
+ * 回答的是"结果是不是等于没换"（`delta` 太小 = 原地打转 → 强制转人工），
+ * **不**回答"现在还该不该重排"—— 后者是事前 `checkGates` 的职责，两者不得混用。
+ *
+ * ## 不变式：预算类闸门是**事前**判断，绝不放在这里复查
+ *
+ * 预算类闸门（`MAX_REPLANS` / `MAX_COST` / `MAX_DURATION`）约束的是**未来的工作量**，
+ * 作用是拦住"不要再开始新一轮"；事后丢弃已完成的工作毫无意义 —— 钱已经付了、
+ * 时间已经花了，拦下来也退不回去，候选计划却已经算好了。
+ *
+ * 事后唯一有意义的是收敛判定，因为 `delta` **只有事后才算得出来**（要比"被替换的
+ * 那几步"与"本次新生成的那几步"，而它们都是这一轮的产物）。
+ *
+ * ★ 把 `MAX_DURATION` 放在事后，等于让"干活花了时间"本身成为丢弃正确结果的理由：
+ *   调用点从起飞前走到这里只隔了一次模型调用（真模型 10–30s），而 `maxDurationMs`
+ *   只有 25s —— 于是**每一次**耗时较长的重排都会在算完之后被自己耗时打死，
+ *   自动修复事实上必然失效。真模型路径上观测到的正是这个故障。
+ *
+ * 因此本函数**不接收** `budget` / `nowMs`：它们在事后已无判据意义，不给参数
+ * 就是最强的保证 —— 想要复查预算的人拿不到数据，只能回去改 `checkGates` 的调用时机。
  */
-export function evaluateReplan(input: {
-  budget: ReplanBudget;
-  nowMs: number;
+export function judgeConvergence(input: {
+  /** 受影响子树的差异度，由 `subtreeDelta` 产出。 */
   delta: number;
   config?: GateConfig;
 }): GateOutcome {
   const config = input.config ?? DEFAULT_GATE_CONFIG;
-  const gated = checkGates(input.budget, input.nowMs, config);
-  if (!gated.allowed) return gated;
   if (isStagnant(input.delta, config)) {
     return { allowed: false, reason: 'NO_CONVERGENCE' };
   }

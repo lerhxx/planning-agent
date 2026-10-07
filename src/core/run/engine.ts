@@ -37,7 +37,7 @@ import {
   checkGates,
   DEFAULT_GATE_CONFIG,
   describeGateReason,
-  evaluateReplan,
+  judgeConvergence,
   subtreeDelta,
   type ReplanBudget,
 } from '@/src/core/replan/gates';
@@ -86,6 +86,37 @@ export interface EngineResult {
 const NOOP_SLEEP = async (): Promise<void> => undefined;
 const DEFAULT_STEP_DELAY_MS = 90;
 const DEFAULT_COMPONENT_DELAY_MS = 60;
+
+/**
+ * 诊断尾巴里最多列出的被替换步骤 id 个数。
+ *
+ * 超过就只给个数不给清单：id 列表是给排障的人看的定位线索，不是给人读的故事，
+ * 贴满一屏既没人看，也会把真正的原因（触发码）挤出去。
+ */
+const MAX_DIAGNOSTIC_IDS = 5;
+
+/**
+ * 重排失败的诊断尾巴：**内核通用**信息 —— 触发码（`ReplanTrigger`）+ 被替换的步骤 id。
+ *
+ * ★ 为什么不放进 `ErrorState` 的 props（而是并进 `failRun` 的 message）：
+ *   - 故障现场是 `Error:重规划被闸门拦截：MAX_DURATION` 这一行**纯文本** ——
+ *     它来自 `failRun` 的 `message`（同时进 `ErrorState` 卡片与 `error` 事件）。
+ *     卡片 props 是结构化的、只在 UI 里可见，而报错那一刻看的人看的是日志/告警文本；
+ *     把上下文补进 `message` 才能真正到达"看到报错的人"手里。
+ *   - 这样也只改一处文案出口，不必给 `ErrorState` 再加一个字段（组件 props 契约
+ *     在 `src/components/**`，属于传输层，不该被内核的错误语义撑大）。
+ *
+ * ⚠️ 全是内核通用表述，**不得出现任何领域语义**（触发码本身已是内核枚举，步骤 id 是内核生成的）。
+ */
+function describeReplanContext(trigger: ReplanTrigger, impactedIds: readonly string[]): string {
+  if (impactedIds.length === 0) {
+    return `（触发=${trigger}，受影响步骤=无）`;
+  }
+  const shown = impactedIds.slice(0, MAX_DIAGNOSTIC_IDS).join('、');
+  const rest = impactedIds.length - Math.min(impactedIds.length, MAX_DIAGNOSTIC_IDS);
+  const suffix = rest > 0 ? ` 等共 ${impactedIds.length} 个` : '';
+  return `（触发=${trigger}，受影响步骤=${shown}${suffix}）`;
+}
 
 function makeId(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -419,7 +450,13 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
     }
   };
 
-  /** 触发一轮重规划（含三重闸门 + 收敛判定 + 重排结果复校验）。 */
+  /**
+   * 触发一轮重规划（**事前**闸门 + **事后**收敛判定 + 重排结果复校验）。
+   *
+   * 失败时除`reason` 外还带一个 `context`：内核通用的诊断尾巴（触发码 + 被替换的
+   * 步骤 id）。这轮排查之所以绕了这么多层，就是因为错误一路都不带上下文 ——
+   * 只看得到"被闸门拦截"，看不到"是哪一步失败、因为什么才触发的重排"。
+   */
   const doReplan = async (params: {
     seedIds: string[];
     trigger: ReplanTrigger;
@@ -428,8 +465,15 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
     maxAttempts: number;
   }): Promise<
     | { ok: true; plan: Plan; removedIds: string[]; addedSteps: Step[]; delta: number }
-    | { ok: false; reason: string }
+    | { ok: false; reason: string; context: string }
   > => {
+    /** 诊断尾巴：`trigger` 在整个 `doReplan` 期间不变，先绑上免得每条 return 都写一遍。 */
+    const fail = (reason: string, impactedIds: readonly string[] = []): { ok: false; reason: string; context: string } => ({
+      ok: false,
+      reason,
+      context: describeReplanContext(params.trigger, impactedIds),
+    });
+
     const before = plan;
     const strategy = decideStrategy({
       trigger: params.trigger,
@@ -438,8 +482,9 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
       maxAttempts: params.maxAttempts,
     });
 
-    if (strategy === 'retry-step') return { ok: false, reason: 'RETRY_EXHAUSTED' };
-    if (strategy === 'ask-user') return { ok: false, reason: 'ASK_USER' };
+    // 策略决定不重排（改重试 / 转人工）时，影响面还没算出来 —— 诊断只带触发码。
+    if (strategy === 'retry-step') return fail('RETRY_EXHAUSTED');
+    if (strategy === 'ask-user') return fail('ASK_USER');
 
     const impact =
       strategy === 'full-replan'
@@ -450,10 +495,11 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
           }
         : collectImpact(before, params.seedIds);
 
-    if (impact.impactedIds.length === 0) return { ok: false, reason: 'NOTHING_TO_REPLAN' };
+    if (impact.impactedIds.length === 0) return fail('NOTHING_TO_REPLAN');
 
+    // ★ 事前闸门：唯一该问"还该不该再开一轮"的地方。红线 17。
     const gated = checkGates(budget, now().getTime(), DEFAULT_GATE_CONFIG);
-    if (!gated.allowed) return { ok: false, reason: gated.reason };
+    if (!gated.allowed) return fail(gated.reason, impact.impactedIds);
 
     const revision = before.revision + 1;
     const beforeIds = new Set(before.steps.map((step) => step.id));
@@ -489,8 +535,11 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
     const generated = candidate.steps.filter((step) => !beforeIds.has(step.id));
     const delta = subtreeDelta(replaced, generated);
 
-    const verdict = evaluateReplan({ budget, nowMs: now().getTime(), delta });
-    if (!verdict.allowed) return { ok: false, reason: verdict.reason };
+    // ★ 事后判定**只**看收敛，不复查预算：预算类闸门是"事前"约束（见 gates.ts 的
+    // 不变式注释）。此处若再查一次时长，那一次真模型调用（10–30s）本身就会把
+    // 25s 预算顶穿，于是每一轮重排都在算完之后被自己耗时打成 MAX_DURATION。
+    const verdict = judgeConvergence({ delta });
+    if (!verdict.allowed) return fail(verdict.reason, impact.impactedIds);
 
     // 重排结果同样要过校验：新计划依旧不合法 → 这一轮重排无效。
     // 注意 attempt + 1：重排本身已经消耗掉一次尝试，再用尽就转人工，不无限重排。
@@ -501,8 +550,8 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
       attempt: params.attempt + 1,
       maxAttempts: params.maxAttempts,
     });
-    if (postAction === 'ask-user') return { ok: false, reason: 'VALIDATION_ASK_USER' };
-    if (postAction !== 'continue') return { ok: false, reason: 'VALIDATION_FAILED' };
+    if (postAction === 'ask-user') return fail('VALIDATION_ASK_USER', impact.impactedIds);
+    if (postAction !== 'continue') return fail('VALIDATION_FAILED', impact.impactedIds);
 
     budget.replanCount += 1;
     budget.costCNY += 0.05;
@@ -610,7 +659,11 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
         if (outcome.reason === 'VALIDATION_ASK_USER') {
           return askUserForValidation('重排后的计划仍未通过校验，希望怎么继续？');
         }
-        return failRun(plan, `校验未通过且无法重排：${outcome.reason}`, outcome.reason);
+        return failRun(
+          plan,
+          `校验未通过且无法重排：${outcome.reason}${outcome.context}`,
+          outcome.reason,
+        );
       }
       applyReplanOutcome(outcome);
     }
@@ -726,11 +779,13 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
         if (outcome.reason === 'VALIDATION_ASK_USER') {
           return askUserForValidation('重排后的计划仍未通过校验，希望怎么继续？');
         }
+        // 收敛判定是**事后**判断：走到这里的 `NO_CONVERGENCE` 意味着"算出来的计划
+        // 和原来几乎一样"，钱和时间都已经花掉了，此时唯一有意义的事是如实告知并停下。
         const message =
           outcome.reason === 'NO_CONVERGENCE'
             ? '重规划结果与原计划几乎一致，判定为原地打转，已停止自动修复'
-            : `重规划被闸门拦截：${outcome.reason}`;
-        return failRun(plan, message, outcome.reason);
+            : `重规划未能继续：${outcome.reason}`;
+        return failRun(plan, `${message}${outcome.context}`, outcome.reason);
       }
 
       applyReplanOutcome(outcome);
