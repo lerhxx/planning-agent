@@ -92,7 +92,7 @@ app/api/**       服务端代码唯一入口（Route Handler）
 - **PlanCompiler 必须是纯函数**：`Plan → ExecutionGraph(IR) → 运行时图`，无副作用、可单测、含依赖环检测。
   ⛔ 不得放在 `src/core/runtime/mastra/**` 里（否则换框架要重写、Mock 无法复用）。
 - **Step id 稳定性**：已完成 step 的 id 在重规划后**不变**（天然幂等键）。
-- **重规划三重闸门**：次数 ≤5 / 成本 ≤¥2 / 时长 ≤25s。
+- **重规划三重闸门**：次数 ≤5 / 成本 ≤¥2 / 时长 ≤90s。
 - **收敛判定**：新旧计划 delta < 0.15 判定为原地打转，**强制转人工**。
 - **三线降级**：`RawPayloadCard → ClarifyOptions → ErrorState`，逻辑集中在 `ComponentRenderer`，与传输层解耦。
 - **流式增量**用 RFC 6902 JSON Patch，列表追加用 `{"op":"add","path":"/items/-","value":{...}}`，禁止整包重发 props。
@@ -249,7 +249,7 @@ rm -rf src/domains/<x> && npm run build                  # 必须通过
 1. 在策略表中登记触发条件
 2. 明确影响面（单步 / 下游子树 / 全量）
 3. 保留已完成 step id
-4. 纳入三重闸门（次数 ≤5 / 成本 ≤¥2 / 时长 ≤25s）
+4. 纳入三重闸门（次数 ≤5 / 成本 ≤¥2 / 时长 ≤90s）
 5. 纳入收敛判定（delta < 0.15 强制转人工）
 6. 带单测
 ```

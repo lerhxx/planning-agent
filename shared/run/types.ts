@@ -15,7 +15,7 @@ export const zRunContext = z.object({
   domainId: z.string().min(1),
   revision: z.number().int().nonnegative().default(1),
   startedAt: z.string(),
-  /** 单轮硬约束（PRD §11：≤25s）。 */
+  /** 单轮硬约束（PRD §11：≤90s）。 */
   deadlineAt: z.string(),
   /** 单轮成本闸门余量（PRD §9.3：≤¥2）。 */
   budgetRemainingCNY: z.number().nonnegative().default(2),
