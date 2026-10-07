@@ -82,6 +82,7 @@ export async function createPlan(input: CreatePlanInput, deps: PlannerDeps): Pro
     runId: input.ctx.runId,
     revision,
     now,
+    goalSummary: input.goal.summary,
     validateType: (type) => getStepType(input.domainId, type) !== undefined,
     maxAttemptsFor: (type) => getStepType(input.domainId, type)?.maxAttempts ?? 2,
   });
@@ -114,6 +115,12 @@ export interface BuildStepsOptions {
   runId: string;
   revision: number;
   now?: () => Date;
+  /**
+   * 内核持有的**真实**目标摘要（用户原话，经 `parseGoal` / 澄清答案合成处理过的那份）。
+   * 调用方直接从 `Goal.summary` 取来；`buildSteps` 把它注入每个带 `intent` 的步骤，
+   * 语义（尤其是"覆盖模型写入值"）见 `injectGoalSummary` 的注释。
+   */
+  goalSummary?: string;
   /** step.type 是否在领域白名单内。 */
   validateType?: (type: string) => boolean;
   maxAttemptsFor?: (type: string) => number;
@@ -125,6 +132,46 @@ export interface BuildStepsOptions {
    * 那些 id 不在本草稿自己铸造出的 id 里，必须显式放行。
    */
   allowRefs?: readonly string[];
+}
+
+/** ★ 工具入参里"目标摘要"这个槽位键名（领域工具按这个名字读口径）。 */
+const GOAL_SUMMARY_INPUT_KEY = 'goalSummary';
+
+/**
+ * ★ 把内核持有的真实目标摘要注入步骤的工具入参（**全仓库唯一的注入点**）。
+ *
+ * ## 为什么需要它
+ *
+ * 领域工具普遍从入参里的目标摘要读取口径（范围、期限、额度）来决定检索目标，
+ * 而这份摘要是**内核的事实**（用户原话 + 已确认的澄清答案），不是模型的自由发挥。
+ * 过去只有 MockRuntime 在回放模板时顺手把摘要塞进入参，真模型路径下这一步**缺失** ——
+ * 工具拿不到口径、识别不出范围、报错，步骤被重试到上限仍然全失败。
+ * 这是一条"只有 Mock 才满足的隐性契约"：Mock 顺手替内核兜了底，把缺口一直遮着。
+ *
+ * ## 为什么放在`buildSteps` 而不是 runtime 里
+ *
+ * `buildSteps` 是**草稿 → `Step` 的唯一转换点**，首次规划与重排都走它。
+ * 放在这里 ⇒ 两个 runtime、两条路径自动一致，不必每个 runtime 各记得一次。
+ * 放在 runtime 里 ⇒ 每接入一个新runtime 就要重犯一次，且只有"用过 Mock"的那条被测过。
+ *
+ * ## 覆盖语义：内核事实**覆盖**模型写入的值
+ *
+ * 模型在 `intent.input.goalSummary` 里写的是它自己的**转述**。按红线 2，模型产出是不可信输入，
+ * 转述属于"未经取数的事实"：一旦被当成口径，工具就会拿一份没人核对过的目标去检索 ——
+ * 错城市、错天数、错预算，而且完全静默。所以这里**无条件覆盖**为内核持有的真实摘要。
+ *
+ * ★ 模型写的**其它**入参字段（分类、条数、偏好等）一律保留不动：
+ * 那些是模型的自由度，覆盖它们会把"注入一个事实"变成"接管整个入参"。
+ *
+ * ## 两个边界
+ *
+ * - `intent: null`（纯推理步骤）没有工具入参，不注入 —— 否则凭空造出一个没人消费的字段；
+ * - `goalSummary` 未提供（调用方拿不到目标）时保持草稿原样，不写入 `undefined`。
+ */
+function injectGoalSummary(draft: StepDraft, goalSummary: string | undefined): StepDraft['intent'] {
+  if (!draft.intent) return null;
+  if (goalSummary === undefined) return draft.intent;
+  return { ...draft.intent, input: { ...draft.intent.input, [GOAL_SUMMARY_INPUT_KEY]: goalSummary } };
 }
 
 /** `detail` 里最多列几条悬空引用 —— 再多就刷屏了，够定位即可。 */
@@ -179,7 +226,7 @@ export function buildSteps(
       dependsOn: item.dependsOn.slice(),
       parallelGroup: item.parallelGroup,
       status: 'pending',
-      intent: item.intent ?? null,
+      intent: injectGoalSummary(item, options.goalSummary),
       idempotencyKey: makeIdempotencyKey(options.runId, id, 0),
       attempt: 0,
       maxAttempts: options.maxAttemptsFor?.(item.type) ?? 2,
@@ -237,6 +284,13 @@ export function applyReplanDraft(input: {
   revision: number;
   reason: string;
   runId: string;
+  /**
+   * 内核持有的真实目标摘要。★ 重排路径**必须**由调用方传入：
+   * 本函数拿不到 `Goal`（只有 `plan` / `draft` / `impactedIds`），
+   * 而重排生成的新步骤同样要调工具、同样需要那份口径 —— 不传就等于把
+   * "只有 Mock 才注入"的缺口原样留在重排路径上。
+   */
+  goalSummary?: string;
   now?: () => Date;
   makeId?: (index: number, draft: StepDraft) => string;
   /** 草稿被拒时的回调：让"模型契约违规"在第一现场可见，而不是变成一次无声的空操作。 */
@@ -251,6 +305,7 @@ export function applyReplanDraft(input: {
     runId: input.runId,
     revision: input.revision,
     now,
+    goalSummary: input.goalSummary,
     makeId: input.makeId,
     // ★ 保留步骤（含已完成步骤）仍留在计划里，新步骤引用它们的 id 是合法的，必须放行。
     allowRefs: remain.map((step) => step.id),

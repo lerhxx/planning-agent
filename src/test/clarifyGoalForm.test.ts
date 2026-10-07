@@ -167,7 +167,8 @@ describe('3 · 提交后答案被真正消费', () => {
       [makeFormKey(GOAL_BRIEF_QUESTION_ID, FIELD_DAYS)]: '3',
     });
 
-    // MockRuntime 把 `goal.summary` 当 `goalSummary` 灌进工具入参（script.ts:97），
+    // 内核在建计划时把 `goal.summary` 当 `goalSummary` 注入每个步骤的工具入参
+    // （见 `src/core/planning/planner.ts` 的 `injectGoalSummary`），
     // `parseTripBrief` 从文本读口径 —— 所以这里必须真的解析得出来。
     expect(goal.summary).toContain('3 天');
     expect(goal.summary).toContain('预算 1500 元');

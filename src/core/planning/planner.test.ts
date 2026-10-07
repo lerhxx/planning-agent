@@ -206,3 +206,157 @@ describe('applyReplanDraft：新步骤可以引用保留步骤的 id', () => {
     expect(after.steps.map((step) => step.id)).toEqual(['s-1', 's-2']);
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * ★ 目标摘要注入：全仓库唯一的注入点在 `buildSteps`
+ * ------------------------------------------------------------------ */
+
+describe('★ 目标摘要注入工具入参（真模型路径的必修项）', () => {
+  beforeAll(() => {
+    registerUnitPack();
+  });
+
+  /** 一条带 `intent` 的检索型草稿步骤。 */
+  function searchStep(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 's-1',
+      title: '检索候选',
+      dependsOn: [],
+      intent: { toolName: 'unit.tool', input: { category: 'museum' }, producesFacts: true },
+      ...overrides,
+    };
+  }
+
+  function inputOf(step: { intent: { input: Record<string, unknown> } | null } | undefined) {
+    return step?.intent?.input;
+  }
+
+  it('★★ 模型没写 goalSummary → 注入内核的真实摘要（用户报的故障主断言）', async () => {
+    const result = await plan(makeDraft([searchStep()]));
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(inputOf(result.plan.steps[0])).toEqual({ category: 'museum', goalSummary: goal.summary });
+  });
+
+  it('★ 模型自己写了一个转述 → 被内核的真实摘要覆盖（口径不能由模型说了算）', async () => {
+    const result = await plan(
+      makeDraft([
+        searchStep({
+          intent: {
+            toolName: 'unit.tool',
+            // 模型自行编的摘要：与内核事实不符。
+            input: { category: 'museum', goalSummary: '随便找个地方玩三天' },
+            producesFacts: true,
+          },
+        }),
+      ]),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(inputOf(result.plan.steps[0])?.goalSummary).toBe(goal.summary);
+  });
+
+  it('★ 模型写的其它入参字段（category / limit / city 等）原样保留', async () => {
+    const result = await plan(
+      makeDraft([
+        searchStep({
+          intent: {
+            toolName: 'unit.tool',
+            input: { category: 'museum', limit: 5, city: '杭州', nested: { keep: true } },
+            producesFacts: true,
+          },
+        }),
+      ]),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(inputOf(result.plan.steps[0])).toEqual({
+      category: 'museum',
+      limit: 5,
+      city: '杭州',
+      nested: { keep: true },
+      goalSummary: goal.summary,
+    });
+  });
+
+  it('★ intent 为 null 的纯推理步骤 → 不注入、不报错', async () => {
+    const result = await plan(
+      makeDraft([
+        { id: 's-1', title: '推理一步', dependsOn: [], intent: null },
+        searchStep({ id: 's-2' }),
+      ]),
+    );
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.plan.steps[0]?.intent).toBeNull();
+    expect(inputOf(result.plan.steps[1])?.goalSummary).toBe(goal.summary);
+  });
+
+  it('★ 注入不修改草稿对象本身（纯函数，重复调用结果一致）', async () => {
+    const draft = makeDraft([searchStep()]);
+    const first = await plan(draft);
+    const second = await plan(draft);
+
+    expect(first.ok && second.ok).toBe(true);
+    if (!first.ok || !second.ok) return;
+    expect(inputOf(first.plan.steps[0])).toEqual(inputOf(second.plan.steps[0]));
+    expect(draft.steps[0]?.intent?.input).toEqual({ category: 'museum' });
+  });
+
+  it('★★ 重排路径：新生成的步骤同样带上目标摘要（重排不再是同一条死路）', () => {
+    const before = makePlan([makeStep({ id: 's-1', order: 0, title: '待重排步骤' })]);
+    const after = applyReplanDraft({
+      plan: before,
+      draft: makeDraft([
+        {
+          id: 'r2-1',
+          title: '重排后的检索步骤',
+          dependsOn: [],
+          intent: { toolName: 'unit.tool', input: { category: 'museum' }, producesFacts: true },
+        },
+      ]),
+      impactedIds: ['s-1'],
+      revision: 2,
+      reason: 'step-failed',
+      runId: 'run-unit',
+      goalSummary: goal.summary,
+      now: () => new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    const fresh = after.steps.find((step) => step.id === 'r2-1');
+    expect(fresh?.intent?.input).toEqual({ category: 'museum', goalSummary: goal.summary });
+  });
+
+  it('★ 重排路径：模型在重排草稿里写的转述同样被覆盖', () => {
+    const before = makePlan([makeStep({ id: 's-1', order: 0, title: '待重排步骤' })]);
+    const after = applyReplanDraft({
+      plan: before,
+      draft: makeDraft([
+        {
+          id: 'r2-1',
+          title: '重排后的检索步骤',
+          dependsOn: [],
+          intent: {
+            toolName: 'unit.tool',
+            input: { goalSummary: '模型编的摘要' },
+            producesFacts: true,
+          },
+        },
+      ]),
+      impactedIds: ['s-1'],
+      revision: 2,
+      reason: 'step-failed',
+      runId: 'run-unit',
+      goalSummary: goal.summary,
+      now: () => new Date('2026-01-01T00:00:00.000Z'),
+    });
+
+    expect(after.steps.find((step) => step.id === 'r2-1')?.intent?.input?.goalSummary).toBe(
+      goal.summary,
+    );
+  });
+});

@@ -88,14 +88,17 @@ function readAnswer(ctx: RunContext, stepId: string): string | undefined {
 function planDraft(request: PlanRequest): PlanDraft {
   const template = request.templates[0];
   if (template) {
+    // ★ 这里**原样回放**模板的 `intent`，一个字都不改。
+    // 目标摘要（`intent.input.goalSummary`）由内核在建计划时统一注入 ——
+    // 见 `src/core/planning/planner.ts` 的 `injectGoalSummary`。
+    // 本文件曾经顺手注入过一次，那是"只有 Mock 满足的隐性契约"：
+    // 它替内核兜了底，把真模型路径上的缺口一直遮着，直到真模型返回的入参缺摘要才暴露。
     return {
       summary: `按领域模板生成 ${template.steps.length} 个步骤`,
       steps: template.steps.map((step) => ({
         ...step,
         dependsOn: step.dependsOn.slice(),
-        intent: step.intent
-          ? { ...step.intent, input: { ...step.intent.input, goalSummary: request.goal.summary } }
-          : null,
+        intent: step.intent ? { ...step.intent, input: { ...step.intent.input } } : null,
       })),
     };
   }

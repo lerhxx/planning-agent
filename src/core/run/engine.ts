@@ -525,6 +525,9 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
       revision,
       reason: describeTrigger(params.trigger),
       runId,
+      // ★ 重排新生成的步骤同样要调工具、同样需要目标摘要才能识别出口径 ——
+      // 与首次规划走同一个内核事实（`goal` 是本闭包里 `parseGoal` + 澄清答案合成后的结果）。
+      goalSummary: goal.summary,
       now,
       makeId: (index) => makeReplanStepId(revision, index),
     });
