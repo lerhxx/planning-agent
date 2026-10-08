@@ -31,8 +31,15 @@
  *   契约声称提供了某项信息，实际没提供，模型于是只能凭语义猜工具名
  *   （把一个领域概念自行拼成"名.动作"的形状），猜错就撞上 `工具未在当前领域注册`，
  *   四个步骤全失败、耗尽重排次数。Mock 因为回放模板从不需要这个清单，一直是绿的。
+ *
+ * ★★ 工具入参：同一家族的**第七个成员**，比第六个更深一层：
+ *   清单曾经只给工具名，**不给 `intent.input` 的结构**，于是模型只能照着
+ *   description 里的自然语言标签去填枚举字段 —— 而真实契约只认机器取值。
+ *   工具名对了、入参错了，执行期照样拒收，且抛出的错误与"入参不合法"完全对不上。
+ *   现在 `renderTools()` 连入参约束一起渲染（推导见 `adapter.ts` 的 `toolInputJsonSchema`：
+ *   从领域**真实**的 zod schema 现场导出，不是手抄的枚举表）。
  */
-import type { PlanRequest, ReplanRequest } from '@/src/core/runtime/adapter';
+import type { PlanRequest, ReplanRequest, ToolInputSchema } from '@/src/core/runtime/adapter';
 
 /** 通用约束段：两个 prompt 共用。 */
 function commonRules(): string {
@@ -159,6 +166,29 @@ function renderStepTypes(request: PlanRequest | ReplanRequest): string {
  * 清单顺序由 `adapter.ts` 的 `ToolBrief[]` 决定，内核那边已按注册名字典序排好
  * （见 `domainRegistry.ts` 的 `getTools`）—— prompt 不重排，避免同一份注册表
  * 在两次渲染间给出不同顺序。
+ *
+ * ## ★ 为什么连`inputSchema` 一起渲染（这是"同一个 bug 家族的第七个成员"）
+ *
+ * 清单此前只给`name` / `description` / `maxAttempts`，模型看不到 `intent.input`
+ * 的结构 —— 只能照着 description **猜字段的取值**。而 description 写的是
+ * 人类可读的标签，模型就把标签填进了只认机器取值的枚举字段，于是执行期拒收、
+ * 步骤全失败、耗尽重排次数，用户看到的报错与真实病因完全无关。
+ *
+ * 与前六个成员同源：**契约声称提供了某项信息，实际没提供**。
+ * 补上之后，"工具名"和"入参取值"两类猜测同时消失。
+ *
+ * ## 渲染形态与取舍（只保留模型必需的约束）
+ *
+ * 每个字段一行 `字段名: 类型 | 必填/可选 |枚举 / 范围`，理由：
+ *
+ * - **枚举逐字列出**：这是本次修复的核心，模型必须一眼看到全部合法取值；
+ * - **必填 vs 可选**：靠 JSON Schema 的 `required`（以 input 视角导出，
+ *   带默认值的字段不算必填）—— 不分这个，模型会以为每个字段都得填；
+ * - **数值范围**：`limit` 这类字段模型爱自己发挥数字，越界同样是静默拒收；
+ * - **不渲染** `default` / `description` /嵌套结构：`default` 对模型是无用的
+ *   （它不需要知道"不填会变成什么"，只需要知道"可以不填"）；
+ *   嵌套结构本仓工具入参里不存在，真出现了也应该由领域去接，而不是让
+ *   内核 prompt 渲染器替它决定怎么讲。**这一条是取舍，不是遗漏。**
  */
 function renderTools(request: PlanRequest | ReplanRequest): string {
   const tools = request.tools;
@@ -175,11 +205,36 @@ function renderTools(request: PlanRequest | ReplanRequest): string {
       '- （无）—— 当前领域没有注册任何工具，因此**所有步骤的 intent 都必须设为 null**。',
     ].join('\n');
   }
-  const lines = tools.map(
-    (tool) =>
-      `- name="${tool.name}" | 说明="${tool.description}" | 最多尝试 ${tool.maxAttempts} 次`,
-  );
+  const lines = tools.flatMap((tool) => [
+    `- name="${tool.name}" | 说明="${tool.description}" | 最多尝试 ${tool.maxAttempts} 次`,
+    ...renderToolInput(tool.inputSchema),
+  ]);
   return ['## 可用工具', ...lines].join('\n');
+}
+
+/**
+ * 把单个工具的入参约束渲染成若干行（无字段时返回空数组，清单只剩工具名那几行）。
+ *
+ * ★ 独立成函数而不是内联在 `renderTools` 里：这段是本文件里唯一**读 schema**
+ *   的地方，单独隔离才能在 schema 变复杂时定点处理，而不是去翻一个混在一起的 map。
+ */
+function renderToolInput(input: ToolInputSchema | undefined): string[] {
+  const fields = Object.entries(input?.fields ?? {});
+  if (fields.length === 0) return [];
+  const required = new Set(input?.required ?? []);
+
+  const rows = fields.map(([name, field]) => {
+    const parts = [`类型=${field.type === '' ? '任意' : field.type}`];
+    parts.push(required.has(name) ? '必填' : '可选');
+    if (field.enum.length > 0) {
+      parts.push(`只能取${field.enum.map((value) => `"${value}"`).join(' / ')}`);
+    }
+    const bounds = Object.entries(field.bounds).map(([key, value]) => `${key}=${value}`);
+    if (bounds.length > 0) parts.push(`范围 ${bounds.join(' ')}`);
+    return `    · ${name}: ${parts.join('，')}`;
+  });
+
+  return ['  入参 intent.input 必须是对象，且只能使用下列字段与取值：', ...rows];
 }
 
 /** 规划 prompt。 */
@@ -214,9 +269,18 @@ export function planSystemPrompt(request: PlanRequest): string {
 
 /** 重规划 prompt。 */
 export function replanSystemPrompt(request: ReplanRequest): string {
-  const impacted = request.impactedSteps.map(
-    (step) => `- id="${step.id}" type="${step.type}" title="${step.title}"`,
-  );
+  /*
+   * ★ 失败原因必须渲染出来，否则精确报错只到内核为止、模型看不到。
+   *   重排是"让模型换掉失败的那几步"的唯一机会，而模型此刻**无法凭空知道**
+   *   上次错在哪个字段、应该填什么值 —— 不给它失败原因，它只能换个写法再撞一次，
+   *   于是 `MAX_REPLANS` 收场。这里渲染的是 `step.error.message`：
+   *   工具层已保证它只含"字段名 + 合法取值"（入参校验失败时），
+   *   而内核自己的兜底文案也全是常量，不含用户原文。
+   */
+  const impacted = request.impactedSteps.map((step) => {
+    const reason = step.error?.message ? ` | 上次失败原因="${step.error.message}"` : '';
+    return `- id="${step.id}" type="${step.type}" title="${step.title}"${reason}`;
+  });
   const retained = request.retainedSteps.map((step) => `- id="${step.id}" title="${step.title}"`);
 
   return [

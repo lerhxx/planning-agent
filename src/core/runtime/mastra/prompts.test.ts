@@ -14,6 +14,11 @@
  *   ③ ★★ "可用工具"清单**从未被渲染**，而 `commonRules()` 却要求模型只能用它列出的
  *      toolName。模型只能猜工具名，猜错就撞上`工具未在当前领域注册`，
  *      步骤全失败、耗尽重排次数，错误信息与真实病因完全无关。
+ *   ④ ★★★ 清单**只给工具名、不给 `intent.input` 的合法取值**（第七个成员，同源）。
+ *      工具名这次是对的（所以没有 `PLAN_GENERATION_FAILED`），但模型看不见枚举字段的
+ *      合法取值，只能照着 description 里的自然语言标签填 —— 执行期拒收、同样耗尽重排。
+ *      修法：清单连入参约束一起渲染（从真实 zod schema 现场推导，见 `adapter.ts` 的
+ *      `toolInputJsonSchema`）。
  *   共同形态：**prompt 声称提供了某项信息，实际没提供**。
  *   所以：渲染输出形状时每个字段都必须带类型；契约引用的每一节都必须真的渲染出来。
  *
@@ -64,10 +69,36 @@ const STEP_TYPES = [
 /**
  * 领域注册过的工具清单（给模型看的）。刻意用**不像类型名**的名字 ——
  * 模型看到的就是这些字符串，它写`intent.toolName` 时只可能照抄。
+ *
+ * ★ `inputSchema` 是**必填**（不是 `.optional()`）：它是"工具入参的合法取值"
+ *   唯一进入 prompt 的通道，缺了它模型就只能照description 猜字段取值。
+ *   真实装配路径 `domainRegistry.getToolBriefs` 由 `toolInputJsonSchema`
+ *   从工具的 zod schema 现场推导，所以这里手写一份**形状相同**的即可。
  */
 const TOOLS = [
-  { name: 'unit.fetch', description: '按关键词取回素材', maxAttempts: 2 },
-  { name: 'unit.publish', description: '把素材发布成最终产物', maxAttempts: 3 },
+  {
+    name: 'unit.fetch',
+    description: '按关键词取回素材',
+    maxAttempts: 2,
+    inputSchema: {
+      fields: {
+        keyword: { type: 'string', enum: [], bounds: {} },
+        // ★ 枚举字段：清单必须把它逐字渲染出来（这是模型不再猜取值的唯一依据）。
+        scope: { type: 'string', enum: ['shallow', 'deep'], bounds: {} },
+        limit: { type: 'integer', enum: [], bounds: { maximum: 20 } },
+      },
+      required: ['keyword'],
+    },
+  },
+  {
+    name: 'unit.publish',
+    description: '把素材发布成最终产物',
+    maxAttempts: 3,
+    inputSchema: {
+      fields: { target: { type: 'string', enum: ['alpha', 'beta'], bounds: {} } },
+      required: ['target'],
+    },
+  },
 ];
 
 const PLAN_REQUEST = zPlanRequest.parse({
@@ -281,6 +312,59 @@ describe.each(CASES)('$name：可用工具清单必须真的渲染出来', ({ re
   it('⑤ 不再有"清单为空就放弃工具"的误导（清单非空时不得出现该指令）', () => {
     // 反向断言：非空清单下出现"必须设为 null"就是错的指令
     expect(text).not.toContain('当前领域没有注册任何工具');
+  });
+});
+
+/* ------------------------------------------------------------------ *
+ * ★★ 第七个 bug：清单给了工具名，却没给 `intent.input` 的合法取值
+ * ------------------------------------------------------------------ */
+
+/*
+ * 故障现象：工具名**对了**（所以没有 `PLAN_GENERATION_FAILED`），
+ * 但四个步骤在**工具执行期**全失败，最终 `MAX_REPLANS` 收场。
+ *
+ * 根因：清单只渲染 `name` / `description` / `maxAttempts`，
+ * 模型看不到 `intent.input` 的结构 —— 只能照着 description 里的**自然语言标签**
+ * 去填只认机器取值的枚举字段。工具名对了，入参错了。
+ *
+ * 与前六个同源：**契约声称提供了某项信息，实际没提供**，只是发生在更深一层。
+ * 修法：清单连入参约束一起渲染（约束由 `toolInputJsonSchema` 从真实 zod schema 现场推导）。
+ *
+ * ★ 本文件位于 `src/core/**`：禁止出现任何领域词（红线 8，扫描器**不剥注释**），
+ *   所以这里用 `alpha/beta`、`shallow/deep` 这类中性取值 —— 断言的是
+ *   **渲染机制**，领域取值由 `src/test/toolInputVisibility.test.ts` 守。
+ */
+describe.each(CASES)('$name：清单必须渲染入参的合法取值', ({ render }) => {
+  const text = render();
+
+  it('① 枚举字段的**全部**合法取值都逐字出现（模型据此一次填对）', () => {
+    expect(text).toContain('"shallow"');
+    expect(text).toContain('"deep"');
+    expect(text).toContain('"alpha"');
+    expect(text).toContain('"beta"');
+  });
+
+  it('② 指明了字段名与类型', () => {
+    expect(text).toMatch(/keyword/);
+    expect(text).toMatch(/类型=string/);
+  });
+
+  it('③ 区分必填与可选（模型据此知道能不能省）', () => {
+    expect(text).toMatch(/keyword[\s\S]*必填/);
+    expect(text).toMatch(/limit[\s\S]*可选/);
+  });
+
+  it('④ 数值约束也渲染（模型爱自己发挥数字，越界同样是静默拒收）', () => {
+    expect(text).toMatch(/maximum=20/);
+  });
+
+  it('⑤ 说清了"只能用这些字段"（否则模型会自造字段名）', () => {
+    expect(text).toContain('只能使用下列字段与取值');
+  });
+
+  it('⑥ 清单为空时不得渲染入参行（没有工具就没有入参）', () => {
+    const empty = zPlanRequest.parse({ ...PLAN_REQUEST, tools: [] });
+    expect(planSystemPrompt(empty)).not.toContain('只能使用下列字段与取值');
   });
 });
 

@@ -25,7 +25,7 @@ import {
   type ValidatingProvider,
 } from '@/shared/domain/types';
 import type { RunContext } from '@/shared/run/types';
-import type { ToolBrief } from '@/src/core/runtime/adapter';
+import { toolInputJsonSchema, type ToolBrief } from '@/src/core/runtime/adapter';
 
 type PackMap = Map<string, DomainPack>;
 
@@ -249,6 +249,10 @@ export function getToolBriefs(domainId: string): ToolBrief[] {
     description: tool.description,
     maxAttempts:
       (tool.stepType ? getStepType(domainId, tool.stepType)?.maxAttempts : undefined) ?? 2,
+    // ★ 入参约束由工具**真实的** inputSchema 现场推导（`toolInputJsonSchema`），
+    //   不在这里手抄枚举：手抄的表必然随领域改 schema 而过期，而过期的枚举表
+    //   会让模型稳定地填错值 —— 且报错与病因完全对不上。
+    inputSchema: toolInputJsonSchema(tool.inputSchema),
   }));
 }
 

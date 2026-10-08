@@ -19,7 +19,7 @@
 import { z } from 'zod';
 import { makeFormKey, zSourceRef, type SourceRef } from '@/shared/plan/types';
 import type { RunContext } from '@/shared/run/types';
-import type { ProviderAdapter, ToolSet } from '@/shared/domain/types';
+import type { ProviderAdapter, ToolResult, ToolSet } from '@/shared/domain/types';
 import {
   CATEGORY_LABEL,
   MAX_TRIP_DAYS,
@@ -244,6 +244,109 @@ function toSourceRefs(source: unknown): SourceRef[] {
   return parsed.success ? [parsed.data] : [];
 }
 
+/* ------------------------------------------------------------------ *
+ * 入参校验：**失败必须精确可见**
+ * ------------------------------------------------------------------ */
+
+/**
+ * ★ zod issue → 一句"哪个字段不合法、期望什么"的话。
+ *
+ * ## 为什么不用 `issue.message` 直接拼
+ *
+ * zod 的 `message` 里带`expected` 但**不带字段的合法取值清单**（枚举那句是
+ * `Invalid option: expected one of "a"|"b"`），够用但不稳：不同 zod 版本的措辞会变，
+ * 而这条消息是要**给人看**的（用户看到的报错就是它）。所以这里自己按issue 结构拼，
+ * 保证「字段名 + 合法取值」永远在，且措辞由本仓掌控。
+ *
+ * ## 绝不回显收到的值
+ *
+ * 入参里可能有用户原文（目标摘要、@提及），回显进error message 就等于
+ * 把不可信文本复制到日志/告警/错误卡片里。只用issue 自带的**约束信息**
+ * （`expected` / `values` / `maximum` …），那些是 schema 定义的常量，不是用户输入。
+ */
+function describeIssue(issue: z.core.$ZodIssue): string {
+  const path = issue.path.length > 0 ? issue.path.map(String).join('.') : '(根)';
+  switch (issue.code) {
+    case 'invalid_value': {
+      const values = issue.values.map((value) => `"${String(value)}"`).join(' / ');
+      return `字段 ${path} 的取值不合法，只能是 ${values}`;
+    }
+    case 'invalid_type':
+      return `字段 ${path} 的类型不合法，应为 ${issue.expected}`;
+    case 'too_big':
+      return `字段 ${path} 超出上界（最大 ${issue.maximum}）`;
+    case 'too_small':
+      return `字段 ${path} 低于下界（最小 ${issue.minimum}）`;
+    case 'unrecognized_keys':
+      return `存在未声明的字段：${issue.keys.join('、')}`;
+    case 'invalid_format':
+      return `字段 ${path} 的格式不合法（要求 ${issue.format}）`;
+    default:
+      return `字段 ${path} 不满足约束（${issue.code}）`;
+  }
+}
+
+/**
+ * ★ 入参不合法的**唯一出口**：返回精确失败，绝不替换成默认值。
+ *
+ * ## 这段替换掉的是什么（一次真实故障的完整后果链）
+ *
+ * 旧写法是 `parsed.success ? parsed.data : zXxxInput.parse({})`。失败时
+ * `parse({})` 造出一个"**每项都合法、但全是默认值**"的入参，于是：
+ *
+ * 1. 刚由内核注入的 `goalSummary` 被**静默丢弃**（变成空串）；
+ * 2. 枚举字段落回默认值，工具拿着一个"什么都为空"的请求去跑；
+ * 3. 抛出的错误（多半来自下游 Provider）与真实病因"入参字段取值不合法"**完全对不上**。
+ *
+ * 三条里最致命的是第3 条：它把排查方向整个带偏 —— 而每一步单看都"完全合理"。
+ *
+ * ## 为什么 `error` 里带上"收到的原始入参键名"
+ *
+ * 这是**回归锁**：证明 `goalSummary` 没有被静默替换成空串这件事被掩盖了。
+ * 只打**键名**不打值 —— 值可能含用户输入。
+ *
+ * ## 为什么码选`PROVIDER_VALIDATION_FAILED`
+ *
+ * `KERNEL_ERROR_CODES` 里与"入参不合法"语义最贴近的就是它：
+ * 触发码表的既有含义是"**上游交回来的东西没过校验**"（`parse.ts` 用它标
+ * "模型返回的计划未通过 schema 校验"），而模型给的 `intent.input` 正是同一类
+ * "上游交回来的不可信数据"。`TOOL_FAILED` 太宽（会与真正的执行期故障混同），
+ * 新造一个码则破坏白名单的穷尽性（红线 10）。
+ *
+ * ## `retryable` 为什么是 false
+ *
+ * 入参不合法是**确定性**失败：同样的入参再跑一次必然同样失败，
+ * 标成可重试只会白白耗掉 `maxAttempts` 再进重排。重排是唯一正确的出路，
+ * 而重排 prompt 现在能看到精确的失败原因（`trigger` +步骤 id）。
+ */
+function inputRejected(
+  toolName: string,
+  issues: z.core.$ZodIssue[],
+  rawInput: unknown,
+  startedAt: number,
+): ToolResult<never> {
+  const detail = issues.slice(0, 3).map(describeIssue).join('；');
+  const receivedKeys =
+    typeof rawInput === 'object' && rawInput !== null && !Array.isArray(rawInput)
+      ? Object.keys(rawInput as Record<string, unknown>)
+      : [];
+  return {
+    ok: false,
+    // ★ 空数组是刻意的：`producesFacts` 的步骤一旦带上事实性sourceRefs
+    //   就等于宣称"这些事实有来源"，而此刻一把事实都没拿到。
+    sourceRefs: [],
+    isEstimate: false,
+    durationMs: Date.now() - startedAt,
+    error: {
+      code: 'PROVIDER_VALIDATION_FAILED',
+      message:
+        `${toolName} 的入参未通过校验：${detail}` +
+        `（收到的字段名：${receivedKeys.length > 0 ? receivedKeys.join('、') : '无'}）`,
+      retryable: false,
+    },
+  };
+}
+
 /** 本轮的图片附件（引用优先：只带描述符，字节不进请求体）。 */
 function imageAttachments(ctx: RunContext): Array<{ id: string; name: string }> {
   return (ctx.attachments ?? [])
@@ -270,7 +373,12 @@ export const travelTools: ToolSet = {
     async execute(input: unknown, ctx: RunContext) {
       const startedAt = Date.now();
       const parsed = zPoiSearchInput.safeParse(input ?? {});
-      const request = parsed.success ? parsed.data : zPoiSearchInput.parse({});
+      // ★ 入参不合法 ⇒ 精确失败，不再 `parse({})` 静默替换成"全默认值"
+      //   （那会丢掉 goalSummary 并让错误与病因对不上，见 inputRejected 的注释）。
+      if (!parsed.success) {
+        return inputRejected('travel.poiSearch', parsed.error.issues, input, startedAt);
+      }
+      const request = parsed.data;
       const brief = resolveTripBrief({ goalSummary: request.goalSummary, city: request.city });
 
       const providers = createTripProviders().create(ctx);
@@ -326,7 +434,10 @@ export const travelTools: ToolSet = {
     async execute(input: unknown, ctx: RunContext) {
       const startedAt = Date.now();
       const parsed = zTripBriefInput.safeParse(input ?? {});
-      const request = parsed.success ? parsed.data : zTripBriefInput.parse({});
+      if (!parsed.success) {
+        return inputRejected('travel.tripBrief', parsed.error.issues, input, startedAt);
+      }
+      const request = parsed.data;
       const brief = resolveTripBrief({ goalSummary: request.goalSummary });
       const answers = readAnswers(ctx);
 
@@ -411,7 +522,10 @@ export const travelTools: ToolSet = {
     async execute(input: unknown, ctx: RunContext) {
       const startedAt = Date.now();
       const parsed = zImageUnderstandInput.safeParse(input ?? {});
-      const request = parsed.success ? parsed.data : zImageUnderstandInput.parse({});
+      if (!parsed.success) {
+        return inputRejected('travel.imageUnderstand', parsed.error.issues, input, startedAt);
+      }
+      const request = parsed.data;
       const goalText = request.goalSummary ?? '';
 
       const attachments = imageAttachments(ctx);
@@ -572,7 +686,10 @@ export const travelTools: ToolSet = {
     async execute(input: unknown, ctx: RunContext) {
       const startedAt = Date.now();
       const parsed = zItineraryComposeInput.safeParse(input ?? {});
-      const request = parsed.success ? parsed.data : zItineraryComposeInput.parse({});
+      if (!parsed.success) {
+        return inputRejected('travel.itineraryCompose', parsed.error.issues, input, startedAt);
+      }
+      const request = parsed.data;
       const brief = resolveTripBrief({
         goalSummary: request.goalSummary,
         city: request.city,
