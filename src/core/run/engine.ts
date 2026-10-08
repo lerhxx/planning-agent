@@ -95,8 +95,81 @@ const DEFAULT_COMPONENT_DELAY_MS = 60;
  */
 const MAX_DIAGNOSTIC_IDS = 5;
 
+/** 单条失败原因摘要的字符上限（防御性：内核标签都很短，但渲染出口只留一道闸）。 */
+const MAX_REASON_CHARS = 24;
+
 /**
- * 重排失败的诊断尾巴：**内核通用**信息 —— 触发码（`ReplanTrigger`）+ 被替换的步骤 id。
+ * 失败步骤没有可用原因文本时的**显式占位**。
+ *
+ * ★ 为什么必须显式写出来而不是静默省略：`受影响步骤=s-1=工具调用超时、s-2` 里
+ *   读不出"s-2 到底为什么没的" —— 省略与"它没问题"在文本上无法区分。空缺也要可见。
+ */
+const REASON_UNKNOWN = '原因未知';
+
+/** 受影响但从未执行过的步骤（纯粹被依赖关系带进影响面，自身没失败）。 */
+const REASON_NOT_RUN = '未执行';
+
+/**
+ * 内核通用错误码 → 面向用户的短标签。
+ *
+ * ★★ 这是**唯一**允许出现在失败原因位置的数据源：键取自内核通用码白名单，
+ * 值是内核自己写死的常量，因此渲染出的字符**全部来自内核**，
+ * 不含任何模型输出、工具入参或用户输入。
+ *
+ * 为什么**不**展示 `Step.error.message`：
+ * - 该字段的来源不受内核约束 —— `executor.ts` 的兜底 catch 直接透传
+ *   `error instanceof Error ? error.message`（任意异常消息，含外部文本），
+ *   `runtime/mastra/parse.ts` 又会把 zod 的校验文本拼进去；
+ * - 更进一步，`AgentError.detail` 里明确躺着 `toolName` 与 `allowedToolNames`
+ *   （`planner.ts` 有意回传给模型"该改成什么"），那是**给模型看的纠错数据**，
+ *   透给用户等于把模型的中间状态铺到 UI 上。
+ *
+ * 所以走"**白名单查表**"而不是"截断原文"：不在表里的码一律 `原因未知`。
+ * 这样"防泄漏"就不依赖"截断得够短"，而是结构上不可能渲染出外部文本。
+ */
+const KERNEL_ERROR_LABELS: Readonly<Record<string, string>> = {
+  PROVIDER_VALIDATION_FAILED: '返回内容未通过校验',
+  SOURCE_MISSING: '缺少结果来源',
+  TOOL_FAILED: '工具调用失败',
+  TOOL_TIMEOUT: '工具调用超时',
+  PLAN_CYCLE_DETECTED: '计划存在循环依赖',
+  PLAN_DEPENDENCY_MISSING: '计划缺少依赖步骤',
+  PLAN_PARALLEL_GROUP_DEPENDENCY: '并行分组依赖非法',
+  PLAN_GENERATION_FAILED: '计划生成失败',
+  DOMAIN_PACK_NOT_FOUND: '领域包未注册',
+  REPLAN_GATE_BLOCKED: '重排被闸门拦截',
+  REPLAN_NO_CONVERGENCE: '重排未收敛',
+  USER_ABORTED: '用户已中止',
+  INTERNAL_ERROR: '内核内部错误',
+};
+
+/** 截断到上限（超长时补省略号）。内核标签都很短，这里给渲染出口留一道闸。 */
+function clipReason(text: string): string {
+  return text.length <= MAX_REASON_CHARS ? text : `${text.slice(0, MAX_REASON_CHARS)}…`;
+}
+
+/**
+ * 单个步骤的失败原因摘要（内核通用，无领域语义、无外部原文）。
+ *
+ * 三种取值，从不编造：
+ * - 该步骤**不在计划里** → `原因未知`（拿不到就是拿不到，不猜）；
+ * - **不是失败**（被依赖关系带进影响面、尚未轮到执行）→ `未执行`；
+ * - 失败了但 `error` 缺失、或 `error.code` 不在白名单 → `原因未知`。
+ */
+function describeStepFailureReason(step: Step | undefined): string {
+  if (!step) return REASON_UNKNOWN;
+  if (step.status !== 'failed') return REASON_NOT_RUN;
+  const label = step.error ? KERNEL_ERROR_LABELS[step.error.code] : undefined;
+  return label ? clipReason(label) : REASON_UNKNOWN;
+}
+
+/**
+ * 重排失败的诊断尾巴：**内核通用**信息 —— 触发码（`ReplanTrigger`）+
+ * 被替换的步骤 id + **每个步骤各自的失败原因**。
+ *
+ * 连续三轮的排查都卡在同一处：报错只说"哪些步骤失败了"，不说"为什么失败"。
+ * 触发码与步骤 id 是先补上的（它们直接让下一个缺陷暴露了出来），原因是最后一块 ——
+ * 步骤状态里其实**一直**带着 `error.code`，只是没有任何一条用户可见信息把它带出来。
  *
  * ★ 为什么不放进 `ErrorState` 的 props（而是并进 `failRun` 的 message）：
  *   - 故障现场是 `Error:重规划被闸门拦截：MAX_DURATION` 这一行**纯文本** ——
@@ -106,15 +179,25 @@ const MAX_DIAGNOSTIC_IDS = 5;
  *   - 这样也只改一处文案出口，不必给 `ErrorState` 再加一个字段（组件 props 契约
  *     在 `src/components/**`，属于传输层，不该被内核的错误语义撑大）。
  *
- * ⚠️ 全是内核通用表述，**不得出现任何领域语义**（触发码本身已是内核枚举，步骤 id 是内核生成的）。
+ * ⚠️ 全是内核通用表述，**不得出现任何领域语义**（触发码本身已是内核枚举，
+ * 步骤 id 是内核生成的，原因标签来自上面的白名单查表）。
+ *
+ * @param impacted 每个受影响步骤的 id 与其失败原因摘要，**一一对应、不允许缺项**
+ *                 （缺项会让"原因"与"步骤"对不上号）。
  */
-function describeReplanContext(trigger: ReplanTrigger, impactedIds: readonly string[]): string {
-  if (impactedIds.length === 0) {
+function describeReplanContext(
+  trigger: ReplanTrigger,
+  impacted: readonly { id: string; reason: string }[],
+): string {
+  if (impacted.length === 0) {
     return `（触发=${trigger}，受影响步骤=无）`;
   }
-  const shown = impactedIds.slice(0, MAX_DIAGNOSTIC_IDS).join('、');
-  const rest = impactedIds.length - Math.min(impactedIds.length, MAX_DIAGNOSTIC_IDS);
-  const suffix = rest > 0 ? ` 等共 ${impactedIds.length} 个` : '';
+  const shown = impacted
+    .slice(0, MAX_DIAGNOSTIC_IDS)
+    .map((item) => `${item.id}=${item.reason}`)
+    .join('、');
+  const rest = impacted.length - Math.min(impacted.length, MAX_DIAGNOSTIC_IDS);
+  const suffix = rest > 0 ? ` 等共 ${impacted.length} 个` : '';
   return `（触发=${trigger}，受影响步骤=${shown}${suffix}）`;
 }
 
@@ -454,8 +537,9 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
    * 触发一轮重规划（**事前**闸门 + **事后**收敛判定 + 重排结果复校验）。
    *
    * 失败时除`reason` 外还带一个 `context`：内核通用的诊断尾巴（触发码 + 被替换的
-   * 步骤 id）。这轮排查之所以绕了这么多层，就是因为错误一路都不带上下文 ——
-   * 只看得到"被闸门拦截"，看不到"是哪一步失败、因为什么才触发的重排"。
+   * 步骤 id + 每个步骤各自的失败原因）。这轮排查之所以绕了这么多层，就是因为错误
+   * 一路都不带上下文 —— 只看得到"被闸门拦截"，看不到"是哪一步失败、因为什么才触发
+   * 的重排"，更看不到"它自己又是为什么失败的"。
    */
   const doReplan = async (params: {
     seedIds: string[];
@@ -467,11 +551,28 @@ export async function runGoal(input: EngineInput, deps: EngineDeps): Promise<Eng
     | { ok: true; plan: Plan; removedIds: string[]; addedSteps: Step[]; delta: number }
     | { ok: false; reason: string; context: string }
   > => {
-    /** 诊断尾巴：`trigger` 在整个 `doReplan` 期间不变，先绑上免得每条 return 都写一遍。 */
-    const fail = (reason: string, impactedIds: readonly string[] = []): { ok: false; reason: string; context: string } => ({
+    /**
+     * 诊断尾巴：`trigger` 在整个 `doReplan` 期间不变，先绑上免得每条return 都写一遍。
+     *
+     * ★ 原因从**当前 `plan`** 里按 id 现查，而不是从调用点传进来：
+     *   失败原因写在每一步的 `error.code` 上（`executor.ts` 的 `finalize` 写的），
+     *   让调用点组装就等于让每个 `fail(...)` 都要重复一遍查表逻辑 ——
+     *   而"哪一步为什么失败"这件事只有一个权威来源，就是步骤本身。
+     *   `doReplan` 成功之前不会重赋值 `plan`，所以这里读到的始终是失败那一刻的计划。
+     */
+    const fail = (
+      reason: string,
+      impactedIds: readonly string[] = [],
+    ): { ok: false; reason: string; context: string } => ({
       ok: false,
       reason,
-      context: describeReplanContext(params.trigger, impactedIds),
+      context: describeReplanContext(
+        params.trigger,
+        impactedIds.map((id) => ({
+          id,
+          reason: describeStepFailureReason(plan.steps.find((step) => step.id === id)),
+        })),
+      ),
     });
 
     const before = plan;
